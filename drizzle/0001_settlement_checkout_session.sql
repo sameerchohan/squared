@@ -1,0 +1,2 @@
+ALTER TABLE "settlements" ADD COLUMN "stripe_checkout_session_id" text;--> statement-breakpoint
+ALTER TABLE "settlements" ADD CONSTRAINT "settlements_stripe_checkout_session_id_unique" UNIQUE("stripe_checkout_session_id");
