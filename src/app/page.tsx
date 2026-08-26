@@ -5,7 +5,12 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { api, UnauthorizedError } from "@/lib/client";
 
-type Me = { id: string; email: string; name: string };
+type Me = {
+  id: string;
+  email: string;
+  name: string;
+  stripeOnboardingStatus: string;
+};
 type GroupSummary = {
   id: string;
   name: string;
@@ -81,6 +86,8 @@ export default function HomePage() {
         </div>
       </header>
 
+      <PaymentSetupCard status={me.stripeOnboardingStatus} />
+
       <section className="mt-8">
         <h2 className="text-lg font-medium">Your groups</h2>
         {groups.length === 0 ? (
@@ -126,5 +133,77 @@ export default function HomePage() {
         {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
       </section>
     </main>
+  );
+}
+
+const STATUS_COPY: Record<
+  string,
+  { label: string; detail: string; action: string | null }
+> = {
+  not_started: {
+    label: "Payments not set up",
+    detail:
+      "Set up payments to receive money when someone settles up with you. You can still add expenses and pay others without it.",
+    action: "Set up payments",
+  },
+  pending: {
+    label: "Payment setup in progress",
+    detail:
+      "Stripe still needs some details before you can receive money. Picking up where you left off takes a minute.",
+    action: "Finish setup",
+  },
+  restricted: {
+    label: "Payments restricted",
+    detail:
+      "Stripe needs more information before you can receive money. Until that's resolved, others can't settle up with you.",
+    action: "Review with Stripe",
+  },
+  active: {
+    label: "Payments active",
+    detail: "You're all set to receive money when someone settles up with you.",
+    action: null,
+  },
+};
+
+function PaymentSetupCard({ status }: { status: string }) {
+  const [error, setError] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
+  const copy = STATUS_COPY[status] ?? STATUS_COPY.not_started;
+
+  async function startOnboarding() {
+    setError(null);
+    setStarting(true);
+    try {
+      const { url } = await api<{ url: string }>("/api/stripe/onboard", {
+        method: "POST",
+      });
+      window.location.assign(url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Something went wrong");
+      setStarting(false);
+    }
+  }
+
+  return (
+    <section
+      className={`mt-6 rounded-xl border p-4 ${
+        status === "active"
+          ? "border-green-600/30 bg-green-600/5"
+          : "border-amber-500/40 bg-amber-500/5"
+      }`}
+    >
+      <h2 className="text-sm font-medium">{copy.label}</h2>
+      <p className="mt-1 text-sm opacity-70">{copy.detail}</p>
+      {copy.action && (
+        <button
+          onClick={startOnboarding}
+          disabled={starting}
+          className="mt-3 rounded-md bg-foreground px-3 py-1.5 text-sm font-medium text-background disabled:opacity-50"
+        >
+          {starting ? "Opening Stripe…" : copy.action}
+        </button>
+      )}
+      {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+    </section>
   );
 }

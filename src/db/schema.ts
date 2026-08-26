@@ -3,7 +3,6 @@ import {
   check,
   index,
   integer,
-  jsonb,
   pgTable,
   primaryKey,
   text,
@@ -149,6 +148,10 @@ export const settlements = pgTable(
       .notNull()
       .references(() => users.id),
     amountCents: integer("amount_cents").notNull(),
+    // The Checkout session is created with the settlement and is the
+    // correlation key for webhooks; the payment intent and transfer ids only
+    // become known once the payer completes checkout.
+    stripeCheckoutSessionId: text("stripe_checkout_session_id").unique(),
     stripePaymentIntentId: text("stripe_payment_intent_id").unique(),
     stripeTransferId: text("stripe_transfer_id").unique(),
     status: text("status").notNull().default("pending"),
@@ -174,10 +177,14 @@ export const settlements = pgTable(
 
 // Idempotency ledger for Stripe webhooks. Handlers INSERT ... ON CONFLICT DO
 // NOTHING on the event id and skip processing when the row already existed.
+//
+// Only the id and type are stored. Event payloads carry personal data
+// (names, addresses, bank details) that Stripe already retains and exposes in
+// its dashboard, so copying them here would add compliance surface without
+// adding capability.
 export const stripeEvents = pgTable("stripe_events", {
   id: text("id").primaryKey(),
   type: text("type").notNull(),
-  payload: jsonb("payload"),
   processedAt: timestamp("processed_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

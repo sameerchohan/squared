@@ -26,16 +26,26 @@ type Balances = {
   balances: { userId: string; name: string; netCents: number }[];
   suggestedTransfers: { fromUser: string; toUser: string; amountCents: number }[];
 };
+type Settlement = {
+  id: string;
+  fromUser: string;
+  toUser: string;
+  amountCents: number;
+  status: string;
+  createdAt: string;
+};
 type SplitType = "equal" | "exact" | "percentage";
 
 export default function GroupPage() {
   const router = useRouter();
   const { groupId } = useParams<{ groupId: string }>();
 
+  const [meId, setMeId] = useState<string | null>(null);
   const [group, setGroup] = useState<Group | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [balances, setBalances] = useState<Balances | null>(null);
+  const [settlements, setSettlements] = useState<Settlement[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const reload = () => setReloadKey((k) => k + 1);
@@ -43,16 +53,20 @@ export default function GroupPage() {
   useEffect(() => {
     let cancelled = false;
     Promise.all([
+      api<{ user: { id: string } }>("/api/auth/me"),
       api<{ group: Group; members: Member[] }>(`/api/groups/${groupId}`),
       api<{ expenses: Expense[] }>(`/api/groups/${groupId}/expenses`),
       api<Balances>(`/api/groups/${groupId}/balances`),
+      api<{ settlements: Settlement[] }>(`/api/groups/${groupId}/settlements`),
     ])
-      .then(([detail, expensesRes, balancesRes]) => {
+      .then(([meRes, detail, expensesRes, balancesRes, settlementsRes]) => {
         if (cancelled) return;
+        setMeId(meRes.user.id);
         setGroup(detail.group);
         setMembers(detail.members);
         setExpenses(expensesRes.expenses);
         setBalances(balancesRes);
+        setSettlements(settlementsRes.settlements);
       })
       .catch((e: unknown) => {
         if (cancelled) return;
@@ -77,7 +91,7 @@ export default function GroupPage() {
       </main>
     );
   }
-  if (!group || !balances) {
+  if (!group || !balances || !meId) {
     return <main className="p-8 opacity-60">Loading…</main>;
   }
 
@@ -94,7 +108,13 @@ export default function GroupPage() {
       </header>
 
       <div className="mt-6 grid gap-6 sm:grid-cols-2">
-        <BalancesCard balances={balances} nameOf={nameOf} />
+        <BalancesCard
+          groupId={groupId}
+          balances={balances}
+          members={members}
+          meId={meId}
+          nameOf={nameOf}
+        />
         <MembersCard groupId={groupId} members={members} onChanged={reload} />
       </div>
 
@@ -123,17 +143,43 @@ export default function GroupPage() {
           </ul>
         )}
       </section>
+
+      <SettlementHistory settlements={settlements} nameOf={nameOf} />
     </main>
   );
 }
 
 function BalancesCard({
+  groupId,
   balances,
+  members,
+  meId,
   nameOf,
 }: {
+  groupId: string;
   balances: Balances;
+  members: Member[];
+  meId: string;
   nameOf: (id: string) => string;
 }) {
+  const [error, setError] = useState<string | null>(null);
+  const [payingTo, setPayingTo] = useState<string | null>(null);
+
+  async function settleUp(toUser: string, amountCents: number) {
+    setError(null);
+    setPayingTo(toUser);
+    try {
+      const { checkoutUrl } = await api<{ checkoutUrl: string }>(
+        `/api/groups/${groupId}/settlements`,
+        { method: "POST", body: { toUser, amountCents } }
+      );
+      window.location.assign(checkoutUrl);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Something went wrong");
+      setPayingTo(null);
+    }
+  }
+
   return (
     <section className="rounded-xl border border-black/10 p-4 dark:border-white/15">
       <h2 className="text-lg font-medium">Balances</h2>
@@ -161,18 +207,91 @@ function BalancesCard({
       {balances.suggestedTransfers.length === 0 ? (
         <p className="mt-1 text-sm opacity-60">All settled up 🎉</p>
       ) : (
-        <ul className="mt-1 space-y-1 text-sm">
-          {balances.suggestedTransfers.map((t, i) => (
-            <li key={i} className="opacity-80">
-              {nameOf(t.fromUser)} pays {nameOf(t.toUser)}{" "}
-              <span className="font-medium">{formatCents(t.amountCents)}</span>
-            </li>
-          ))}
+        <ul className="mt-2 space-y-2 text-sm">
+          {balances.suggestedTransfers.map((t, i) => {
+            const isMine = t.fromUser === meId;
+            const recipient = members.find((m) => m.id === t.toUser);
+            const canReceive = recipient?.stripeOnboardingStatus === "active";
+
+            return (
+              <li key={i} className="flex flex-wrap items-center gap-2">
+                <span className="opacity-80">
+                  {isMine ? "You pay" : `${nameOf(t.fromUser)} pays`}{" "}
+                  {isMine ? nameOf(t.toUser) : nameOf(t.toUser)}{" "}
+                  <span className="font-medium">
+                    {formatCents(t.amountCents)}
+                  </span>
+                </span>
+                {isMine &&
+                  (canReceive ? (
+                    <button
+                      onClick={() => settleUp(t.toUser, t.amountCents)}
+                      disabled={payingTo !== null}
+                      className="rounded-md bg-foreground px-2.5 py-1 text-xs font-medium text-background disabled:opacity-50"
+                    >
+                      {payingTo === t.toUser ? "Opening…" : "Pay now"}
+                    </button>
+                  ) : (
+                    <span className="rounded-md bg-amber-500/10 px-2 py-1 text-xs text-amber-700 dark:text-amber-500">
+                      {nameOf(t.toUser)} hasn&apos;t set up payments yet
+                    </span>
+                  ))}
+              </li>
+            );
+          })}
         </ul>
       )}
-      <p className="mt-2 text-xs opacity-50">
-        Real payments via Stripe coming in the settlement flow.
+      {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+      <p className="mt-3 text-xs opacity-50">
+        Payments are real Stripe transfers to the recipient&apos;s connected
+        account.
       </p>
+    </section>
+  );
+}
+
+const SETTLEMENT_STATUS_COPY: Record<string, string> = {
+  pending: "awaiting payment",
+  processing: "processing",
+  succeeded: "paid",
+  failed: "failed",
+};
+
+function SettlementHistory({
+  settlements,
+  nameOf,
+}: {
+  settlements: Settlement[];
+  nameOf: (id: string) => string;
+}) {
+  if (settlements.length === 0) return null;
+
+  return (
+    <section className="mt-6">
+      <h2 className="text-lg font-medium">Settlements</h2>
+      <ul className="mt-2 divide-y divide-black/10 rounded-xl border border-black/10 text-sm dark:divide-white/15 dark:border-white/15">
+        {settlements.map((s) => (
+          <li key={s.id} className="flex justify-between px-4 py-2.5">
+            <span>
+              {nameOf(s.fromUser)} → {nameOf(s.toUser)}
+            </span>
+            <span className="flex gap-3">
+              <span>{formatCents(s.amountCents)}</span>
+              <span
+                className={
+                  s.status === "succeeded"
+                    ? "text-green-600"
+                    : s.status === "failed"
+                      ? "text-red-600"
+                      : "opacity-60"
+                }
+              >
+                {SETTLEMENT_STATUS_COPY[s.status] ?? s.status}
+              </span>
+            </span>
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }

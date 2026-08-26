@@ -3,14 +3,18 @@ import { db } from "@/db";
 import { users } from "@/db/schema";
 import { createSession, hashPassword } from "@/server/auth";
 import { apiHandler, ApiError, isUniqueViolation } from "@/server/errors";
+import { clientIp, enforceRateLimit } from "@/server/rate-limit";
 
 const registerSchema = z.object({
   email: z.email().transform((e) => e.toLowerCase()),
   name: z.string().trim().min(1).max(100),
-  password: z.string().min(8).max(200),
+  // bcrypt silently truncates beyond 72 bytes, so cap the input rather than
+  // letting two different long passwords authenticate the same account.
+  password: z.string().min(8).max(72),
 });
 
 export const POST = apiHandler(async (req) => {
+  enforceRateLimit(`register:${clientIp(req)}`, 5, 60_000);
   const { email, name, password } = registerSchema.parse(await req.json());
   const passwordHash = await hashPassword(password);
 

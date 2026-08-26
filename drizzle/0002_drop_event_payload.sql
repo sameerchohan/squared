@@ -1,0 +1,1 @@
+ALTER TABLE "stripe_events" DROP COLUMN "payload";
