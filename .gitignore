@@ -31,3 +31,12 @@ Thumbs.db
 *.sqlite
 *.sqlite3
 docker-compose.override.yml
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+.terraform.lock.hcl
+crash.log
