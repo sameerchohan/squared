@@ -24,9 +24,13 @@ variable "app_domain" {
 
 variable "route53_zone_id" {
   description = <<-EOT
-    Route 53 hosted zone for app_domain. When set, certificate validation
-    records are created automatically. Leave empty if DNS lives elsewhere and
-    validate manually — see infra/README.md.
+    Route 53 hosted zone for app_domain. When set, certificate validation and
+    the app's DNS record are created automatically.
+
+    Leave empty when DNS lives elsewhere — this project's domain is on
+    Cloudflare — and add the two records by hand from the
+    acm_validation_records and alb_dns_name outputs. Both must be "DNS only"
+    in Cloudflare; see infra/README.md for why the proxied path breaks.
   EOT
   type        = string
   default     = ""
