@@ -134,7 +134,7 @@ stripe listen --forward-to localhost:3000/api/stripe/webhook
 
 Use card `4242 4242 4242 4242` at checkout. Both parties need to complete Express onboarding before a settlement between them is allowed.
 
-Deployment lives in [`infra/`](infra/) — Terraform for Fargate behind an ALB, RDS in private subnets, and secrets injected from Secrets Manager at task start. It validates but has not been applied; see [`infra/README.md`](infra/README.md) for the cost breakdown and the reasoning behind each trade.
+Deployment lives in [`infra/`](infra/) — Terraform for Fargate behind an ALB, RDS in private subnets, secrets injected from Secrets Manager at task start, and a budget alarm so a demo deployment can't quietly run up a bill. It validates but has not been applied; see [`infra/README.md`](infra/README.md) for the deploy runbook, the cost breakdown, and the reasoning behind each trade.
 
 ---
 
@@ -150,7 +150,7 @@ Deployment lives in [`infra/`](infra/) — Terraform for Fargate behind an ALB, 
 
 **The idempotency ledger grows without bound.** Every Stripe event id is kept forever. Since Stripe stops retrying after a few days, rows older than that window serve no purpose and should be aged out — partitioned by month and dropped, rather than accumulating indefinitely in a table on the hot path of every webhook.
 
-**Single-AZ RDS and one NAT gateway.** Both are cost decisions that trade availability for roughly half the monthly bill. Multi-AZ is the first thing to change once real money moves through the system, followed by a second NAT so an AZ failure can't sever outbound Stripe calls.
+**Tasks run in public subnets, and RDS is single-AZ.** Both are cost decisions, and the first is the more interesting one: a NAT gateway costs ~$32/month and buys network topology rather than access control, since the tasks' security group already admits nothing but the load balancer. Flipping `use_nat_gateway` in the Terraform moves them into private subnets — the topology to run with real money, where a compromised task can't be addressed directly even if a security group is later misconfigured, and outbound traffic leaves from a stable IP an upstream provider can allowlist. Multi-AZ RDS is the other change real users would justify. Both paths are in the code because the trade-off, not the default, is the point.
 
 **Everything is USD.** Currency is assumed rather than stored. Supporting more means a currency column on groups, per-currency balances, and a decision about what "settling up" means across currencies — which is a product question before it's a schema question.
 
