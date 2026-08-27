@@ -42,14 +42,20 @@ locals {
   # Two AZs: RDS requires a subnet group spanning at least two, and the ALB
   # needs two to be highly available.
   azs = slice(data.aws_availability_zones.available.names, 0, 2)
+
+  # Tasks sit behind the NAT when it exists, and otherwise run in public
+  # subnets with a public IP for outbound access only.
+  task_subnet_ids = var.use_nat_gateway ? aws_subnet.private[*].id : aws_subnet.public[*].id
+  task_public_ip  = !var.use_nat_gateway
 }
 
 # ---------------------------------------------------------------------------
 # Networking
 #
-# Public subnets hold only the load balancer and the NAT gateway. The
-# application tasks and the database sit in private subnets with no inbound
-# route from the internet.
+# The load balancer always sits in the public subnets and the database always
+# sits in the private ones, with no route to the internet in either direction.
+# Where the application tasks run depends on use_nat_gateway; either way they
+# accept inbound traffic only from the load balancer's security group.
 # ---------------------------------------------------------------------------
 
 resource "aws_vpc" "main" {
@@ -84,16 +90,21 @@ resource "aws_subnet" "private" {
   tags = { Name = "${var.project}-private-${local.azs[count.index]}" }
 }
 
-# A single NAT gateway serves both AZs. That trades AZ-level redundancy for
-# roughly half the cost (~$32/month each); acceptable here because losing it
-# blocks outbound Stripe calls but not inbound traffic or the database.
+# Created only when use_nat_gateway is true. A single gateway serves both
+# AZs: that trades AZ-level redundancy for roughly half the cost, acceptable
+# because losing it blocks outbound Stripe calls but not inbound traffic or
+# the database.
 resource "aws_eip" "nat" {
+  count = var.use_nat_gateway ? 1 : 0
+
   domain = "vpc"
   tags   = { Name = "${var.project}-nat-eip" }
 }
 
 resource "aws_nat_gateway" "main" {
-  allocation_id = aws_eip.nat.id
+  count = var.use_nat_gateway ? 1 : 0
+
+  allocation_id = aws_eip.nat[0].id
   subnet_id     = aws_subnet.public[0].id
   depends_on    = [aws_internet_gateway.main]
 
@@ -111,15 +122,21 @@ resource "aws_route_table" "public" {
   tags = { Name = "${var.project}-public-rt" }
 }
 
+# Without a NAT gateway the private subnets have no route to the internet.
+# That is correct rather than a limitation: the only thing left in them is
+# the database, which never needs one.
 resource "aws_route_table" "private" {
   vpc_id = aws_vpc.main.id
 
-  route {
-    cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.main.id
-  }
-
   tags = { Name = "${var.project}-private-rt" }
+}
+
+resource "aws_route" "private_nat" {
+  count = var.use_nat_gateway ? 1 : 0
+
+  route_table_id         = aws_route_table.private.id
+  destination_cidr_block = "0.0.0.0/0"
+  nat_gateway_id         = aws_nat_gateway.main[0].id
 }
 
 resource "aws_route_table_association" "public" {

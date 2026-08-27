@@ -75,8 +75,8 @@ resource "aws_ecs_task_definition" "app" {
   family                   = var.project
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = 512
-  memory                   = 1024
+  cpu                      = var.task_cpu
+  memory                   = var.task_memory
   execution_role_arn       = aws_iam_role.execution.arn
   task_role_arn            = aws_iam_role.task.arn
 
@@ -159,10 +159,12 @@ resource "aws_ecs_service" "app" {
   desired_count   = var.desired_count
   launch_type     = "FARGATE"
 
+  # A public IP here is outbound-only: the security group still admits
+  # nothing but the load balancer. See the use_nat_gateway variable.
   network_configuration {
-    subnets          = aws_subnet.private[*].id
+    subnets          = local.task_subnet_ids
     security_groups  = [aws_security_group.app.id]
-    assign_public_ip = false # tasks reach the internet through the NAT
+    assign_public_ip = local.task_public_ip
   }
 
   load_balancer {

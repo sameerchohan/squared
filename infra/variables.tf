@@ -17,13 +17,19 @@ variable "vpc_cidr" {
 }
 
 variable "app_domain" {
-  description = "Domain the app is served from, e.g. squared.example.com."
+  description = "Domain the app is served from."
   type        = string
+  default     = "squared.sameerchohan.com"
 }
 
-variable "acm_certificate_arn" {
-  description = "ARN of an ACM certificate covering app_domain, in this region."
+variable "route53_zone_id" {
+  description = <<-EOT
+    Route 53 hosted zone for app_domain. When set, certificate validation
+    records are created automatically. Leave empty if DNS lives elsewhere and
+    validate manually — see infra/README.md.
+  EOT
   type        = string
+  default     = ""
 }
 
 variable "image_tag" {
@@ -31,10 +37,44 @@ variable "image_tag" {
   type        = string
 }
 
+# ---------------------------------------------------------------------------
+# Topology
+#
+# The NAT gateway is the single largest line item in this stack (~$32/month
+# before data charges) and buys network topology rather than access control.
+#
+#   false — tasks run in public subnets with a public IP. Inbound is still
+#           restricted by security group to the load balancer alone, so
+#           nothing on the internet can reach them; the public IP only serves
+#           outbound calls to Stripe and ECR.
+#   true  — tasks run in private subnets and reach the internet through a NAT
+#           gateway. The topology to run with real money moving through it.
+#
+# The database sits in private subnets either way and is never publicly
+# reachable.
+# ---------------------------------------------------------------------------
+variable "use_nat_gateway" {
+  description = "Run tasks in private subnets behind a NAT gateway (~$32/month)."
+  type        = bool
+  default     = false
+}
+
 variable "desired_count" {
-  description = "Number of Fargate tasks to run."
+  description = "Number of Fargate tasks. One is enough for a demo; deploys stay zero-downtime because ECS starts the replacement before draining."
   type        = number
-  default     = 2
+  default     = 1
+}
+
+variable "task_cpu" {
+  description = "Fargate CPU units. 256 = 0.25 vCPU."
+  type        = number
+  default     = 256
+}
+
+variable "task_memory" {
+  description = "Fargate memory in MiB. Must be a valid pairing with task_cpu."
+  type        = number
+  default     = 512
 }
 
 variable "db_instance_class" {
@@ -47,4 +87,19 @@ variable "enable_performance_insights" {
   description = "Requires db.t4g.medium or larger — AWS rejects it on micro/small."
   type        = bool
   default     = false
+}
+
+# ---------------------------------------------------------------------------
+# Cost guardrails
+# ---------------------------------------------------------------------------
+
+variable "alert_email" {
+  description = "Address that receives budget alerts."
+  type        = string
+}
+
+variable "monthly_budget_usd" {
+  description = "Monthly spend cap. Alerts fire at 80% actual and 100% forecast."
+  type        = number
+  default     = 40
 }
