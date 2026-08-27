@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npx next typegen && npx tsc --noEmit
+
+      - name: Test
+        run: npm test
+
+      # No database or secrets required: the connection pool is constructed
+      # lazily, so nothing connects at import time.
+      - name: Build
+        run: npm run build
+
+  migrations:
+    name: migrations
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: squared
+          POSTGRES_PASSWORD: squared
+          POSTGRES_DB: squared
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U squared"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://squared:squared@localhost:5432/squared
+      PGSSLMODE: disable
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # Proves every migration applies cleanly to an empty database, which is
+      # what a production deploy actually does.
+      - name: Apply migrations from scratch
+        run: node scripts/migrate.mjs
+
+      - name: Verify schema is in sync with migrations
+        run: |
+          npx drizzle-kit generate --name ci_drift_check
+          if [ -n "$(git status --porcelain drizzle/)" ]; then
+            echo "::error::src/db/schema.ts has changes with no matching migration."
+            git status --porcelain drizzle/
+            exit 1
+          fi
+
+  docker:
+    name: docker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the production image
+        run: docker build -t squared:ci .
