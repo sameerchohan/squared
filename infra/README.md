@@ -50,9 +50,15 @@ With the defaults — no NAT gateway, one task at 0.25 vCPU / 0.5 GB — roughly
 | Secrets Manager (5) | ~$2 | ~$2 |
 | **Total** | **~$40, less free tier** | **~$92** |
 
-Free-tier coverage depends on account age — AWS moved new accounts to a credits model in mid-2025, so check your own account rather than assuming the old twelve-month allowances.
+Free-tier coverage depends on account age — AWS moved new accounts to a credits model in mid-2025, so check your own account rather than assuming the old twelve-month allowances. A new account's signup credits typically cover several months of this stack outright.
 
 A budget alarm is provisioned as part of the stack: it emails `alert_email` at 80% of `monthly_budget_usd` on actual spend, and again when the month is forecast to exceed it.
+
+### Running it without paying for it indefinitely
+
+Nothing about this stack needs to stay up to be worth having. Charges are hourly, so a deployment that runs for a week costs roughly a week's fraction of the monthly figure — call it $5–10 to stand it up, prove it works, capture a demo recording and screenshots, and tear it down.
+
+The infrastructure code, the CI pipeline, and this document are what an engineer actually reads; a live URL is a nice bonus with a running meter attached. Reasonable middle ground: deploy during an active job search, and destroy it in between.
 
 ## Secrets
 
@@ -106,6 +112,23 @@ terraform apply -target=aws_acm_certificate.main -var=...
 terraform output acm_validation_records
 # add the CNAME at your DNS provider, then re-run the full apply
 ```
+
+#### Adding the records in Cloudflare
+
+This project's domain is registered at Cloudflare with the apex and `www` pointing to Vercel. A subdomain for the app is purely additive — those two records are untouched, and the portfolio site keeps serving normally.
+
+Two records are needed, both added under **DNS → Records**:
+
+| Name | Type | Content | Proxy |
+|---|---|---|---|
+| `_<hash>.squared` | CNAME | `<value>.acm-validations.aws` | DNS only |
+| `squared` | CNAME | the `alb_dns_name` output | DNS only |
+
+The first comes from `terraform output acm_validation_records`; Cloudflare can't proxy underscore-prefixed records, so it stays DNS-only on its own. The second is the one to be careful with.
+
+**Set it to "DNS only" (grey cloud).** If you turn the orange cloud on, Cloudflare terminates TLS itself and reconnects to the ALB, which is fine only if the zone's **SSL/TLS mode is "Full (strict)"**. On the default **"Flexible"** mode, Cloudflare speaks plain HTTP to the ALB, the ALB's listener answers with its 301 to HTTPS, Cloudflare follows it back to itself, and the site dies in an **infinite redirect loop**. Grey cloud avoids the whole question. If you later want Cloudflare in front for DDoS protection, switch the zone to Full (strict) first, then enable the proxy.
+
+One consequence of grey cloud: the ALB's hostname is publicly visible, which is normal and not a security problem — inbound is still only 80 and 443, and the tasks behind it accept traffic solely from the ALB's security group.
 
 ### 4. Migrate
 
