@@ -113,3 +113,44 @@ jobs:
         run: |
           terraform init -backend=false
           terraform validate
+
+  # Plans the real infrastructure against the real AWS account on every PR,
+  # authenticating through GitHub's OIDC provider. No access key is stored in
+  # this repository: the workflow exchanges a short-lived, repo-scoped GitHub
+  # token for AWS credentials that expire in minutes. The role is read-only
+  # and explicitly denied the ability to decrypt secrets.
+  #
+  # `plan` creates nothing and costs nothing.
+  terraform-plan:
+    name: terraform-plan
+    runs-on: ubuntu-latest
+    # Skipped on forks, which cannot be granted the role.
+    if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push'
+    permissions:
+      id-token: write
+      contents: read
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.13.5
+
+      - name: Plan
+        run: |
+          terraform init -backend=false
+          terraform plan -input=false -no-color
+        env:
+          # terraform.tfvars is gitignored, so plan-only stand-ins are used.
+          # They affect an alarm address and an image tag, not the topology
+          # the plan is checking.
+          TF_VAR_image_tag: ci-plan
+          TF_VAR_alert_email: ci@example.com
