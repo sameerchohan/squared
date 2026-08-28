@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AppShell, Stat } from "@/components/app-shell";
 import {
   Alert,
@@ -11,24 +11,30 @@ import {
   Button,
   Card,
   CardHeader,
+  ConfirmDialog,
+  Dialog,
   EmptyState,
   Field,
+  IconButton,
   Input,
-  Select,
   Skeleton,
   cx,
 } from "@/components/ui";
+import { ExpenseForm } from "@/components/expense-form";
 import {
   AlertIcon,
   ArrowRightIcon,
   CheckIcon,
+  PencilIcon,
   PlusIcon,
   ReceiptIcon,
   ScalesIcon,
+  TrashIcon,
   UsersIcon,
+  XIcon,
 } from "@/components/icons";
 import { api, UnauthorizedError } from "@/lib/client";
-import { formatCents, parseDollarsToCents } from "@/lib/format";
+import { formatCents } from "@/lib/format";
 
 type Me = { id: string; name: string; email: string };
 type Member = {
@@ -37,7 +43,7 @@ type Member = {
   email: string;
   stripeOnboardingStatus: string;
 };
-type Group = { id: string; name: string };
+type Group = { id: string; name: string; createdBy: string };
 type Expense = {
   id: string;
   paidBy: string;
@@ -60,7 +66,6 @@ type Settlement = {
   status: string;
   createdAt: string;
 };
-type SplitType = "equal" | "exact" | "percentage";
 
 export default function GroupPage() {
   const router = useRouter();
@@ -242,7 +247,14 @@ export default function GroupPage() {
               meId={me.id}
               onChanged={reload}
             />
-            <ExpenseList expenses={expenses} nameOf={nameOf} meId={me.id} />
+            <ExpenseList
+              groupId={groupId}
+              expenses={expenses}
+              members={members}
+              nameOf={nameOf}
+              meId={me.id}
+              onChanged={reload}
+            />
             <SettlementHistory settlements={settlements} nameOf={nameOf} meId={me.id} />
           </div>
 
@@ -252,7 +264,9 @@ export default function GroupPage() {
               groupId={groupId}
               members={members}
               meId={me.id}
+              createdBy={group.createdBy}
               onChanged={reload}
+              onLeft={() => router.push("/")}
             />
           </div>
         </div>
@@ -435,64 +449,158 @@ const SPLIT_LABEL: Record<string, string> = {
 };
 
 function ExpenseList({
+  groupId,
   expenses,
+  members,
   nameOf,
   meId,
+  onChanged,
 }: {
+  groupId: string;
   expenses: Expense[];
+  members: Member[];
   nameOf: (id: string) => string;
   meId: string;
+  onChanged: () => void;
 }) {
+  const [editing, setEditing] = useState<Expense | null>(null);
+  const [deleting, setDeleting] = useState<Expense | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function confirmDelete() {
+    if (!deleting) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api(`/api/groups/${groupId}/expenses/${deleting.id}`, { method: "DELETE" });
+      setDeleting(null);
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't delete that expense.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
-    <Card>
-      <CardHeader title="Expenses" description="Most recent first." />
-      {expenses.length === 0 ? (
-        <EmptyState
-          icon={<ReceiptIcon className="h-5 w-5" />}
-          title="No expenses yet"
-          description="Add the first shared cost above and everyone's balance updates immediately."
-        />
-      ) : (
-        <ul className="divide-y divide-[var(--border)]">
-          {expenses.map((expense) => (
-            <li key={expense.id} className="px-5 py-4">
-              <div className="flex items-baseline justify-between gap-4">
-                <p className="min-w-0 truncate text-[15px] font-medium">
-                  {expense.description}
-                </p>
-                <p className="tnum shrink-0 text-[15px] font-semibold">
-                  {formatCents(expense.amountCents)}
-                </p>
-              </div>
-              <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-[var(--text-muted)]">
-                <span>
-                  {expense.paidBy === meId ? "You" : nameOf(expense.paidBy)} paid
-                </span>
-                <span aria-hidden="true">·</span>
-                <Badge>{SPLIT_LABEL[expense.splitType] ?? expense.splitType}</Badge>
-                <span aria-hidden="true">·</span>
-                <time dateTime={expense.createdAt}>
-                  {new Date(expense.createdAt).toLocaleDateString(undefined, {
-                    month: "short",
-                    day: "numeric",
-                  })}
-                </time>
-              </div>
-              <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-[var(--text-muted)]">
-                {expense.shares.map((s) => (
-                  <li key={s.userId} className="tnum">
-                    {s.userId === meId ? "You" : nameOf(s.userId)}{" "}
-                    <span className="font-medium text-[var(--text)]">
-                      {formatCents(s.owedCents)}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </li>
-          ))}
-        </ul>
-      )}
-    </Card>
+    <>
+      <Card>
+        <CardHeader title="Expenses" description="Most recent first." />
+        {expenses.length === 0 ? (
+          <EmptyState
+            icon={<ReceiptIcon className="h-5 w-5" />}
+            title="No expenses yet"
+            description="Add the first shared cost above and everyone's balance updates immediately."
+          />
+        ) : (
+          <ul className="divide-y divide-[var(--border)]">
+            {expenses.map((expense) => {
+              const mine = expense.paidBy === meId;
+              return (
+                <li key={expense.id} className="group/row px-5 py-4">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <p className="min-w-0 flex-1 truncate text-[15px] font-medium">
+                      {expense.description}
+                    </p>
+                    <p className="figure shrink-0 text-[16px]">
+                      {formatCents(expense.amountCents)}
+                    </p>
+                    {/* Actions belong to whoever paid; they stay dim until the
+                        row is hovered or a control inside takes focus. */}
+                    {mine && (
+                      <div className="flex shrink-0 gap-0.5 opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover/row:opacity-100">
+                        <IconButton label="Edit expense" onClick={() => setEditing(expense)}>
+                          <PencilIcon className="h-4 w-4" />
+                        </IconButton>
+                        <IconButton
+                          label="Delete expense"
+                          onClick={() => setDeleting(expense)}
+                          className="hover:text-[var(--negative)]"
+                        >
+                          <TrashIcon className="h-4 w-4" />
+                        </IconButton>
+                      </div>
+                    )}
+                  </div>
+                  <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-[var(--text-muted)]">
+                    <span>{mine ? "You" : nameOf(expense.paidBy)} paid</span>
+                    <span aria-hidden="true">·</span>
+                    <Badge>{SPLIT_LABEL[expense.splitType] ?? expense.splitType}</Badge>
+                    <span aria-hidden="true">·</span>
+                    <time dateTime={expense.createdAt}>
+                      {new Date(expense.createdAt).toLocaleDateString(undefined, {
+                        month: "short",
+                        day: "numeric",
+                      })}
+                    </time>
+                  </div>
+                  <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-[var(--text-muted)]">
+                    {expense.shares.map((sh) => (
+                      <li key={sh.userId} className="tnum">
+                        {sh.userId === meId ? "You" : nameOf(sh.userId)}{" "}
+                        <span className="font-medium text-[var(--text)]">
+                          {formatCents(sh.owedCents)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </Card>
+
+      <Dialog
+        open={editing !== null}
+        onClose={() => setEditing(null)}
+        title="Edit expense"
+        description="Shares are recalculated and balances update on save."
+      >
+        {editing && (
+          <ExpenseForm
+            members={members}
+            meId={meId}
+            submitLabel="Save changes"
+            onCancel={() => setEditing(null)}
+            initial={{
+              description: editing.description,
+              amountCents: editing.amountCents,
+              paidBy: editing.paidBy,
+              splitType: editing.splitType as "equal" | "exact" | "percentage",
+              shares: editing.shares,
+            }}
+            onSubmit={async (payload) => {
+              await api(`/api/groups/${groupId}/expenses/${editing.id}`, {
+                method: "PATCH",
+                body: payload,
+              });
+              setEditing(null);
+              onChanged();
+            }}
+          />
+        )}
+      </Dialog>
+
+      <ConfirmDialog
+        open={deleting !== null}
+        onClose={() => {
+          setDeleting(null);
+          setError(null);
+        }}
+        onConfirm={confirmDelete}
+        title="Delete this expense?"
+        body={
+          deleting
+            ? `"${deleting.description}" for ${formatCents(deleting.amountCents)} will be removed and everyone's balance recalculated. This can't be undone.`
+            : ""
+        }
+        confirmLabel="Delete expense"
+        loading={busy}
+        error={error}
+      />
+    </>
   );
 }
 
@@ -563,22 +671,30 @@ function MembersCard({
   groupId,
   members,
   meId,
+  createdBy,
   onChanged,
+  onLeft,
 }: {
   groupId: string;
   members: Member[];
   meId: string;
+  createdBy: string;
   onChanged: () => void;
+  onLeft: () => void;
 }) {
   const [email, setEmail] = useState("");
   const [fieldError, setFieldError] = useState<string | undefined>();
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [removing, setRemoving] = useState<Member | null>(null);
+  const [removeBusy, setRemoveBusy] = useState(false);
+  const [removeError, setRemoveError] = useState<string | null>(null);
+
+  const isOwner = createdBy === meId;
 
   async function addMember(event: React.FormEvent) {
     event.preventDefault();
     setFormError(null);
-
     const value = email.trim();
     if (!value) {
       setFieldError("Enter an email address.");
@@ -604,70 +720,121 @@ function MembersCard({
     }
   }
 
-  return (
-    <Card className="h-fit">
-      <CardHeader title="Members" description="Everyone splitting costs here." />
-      <ul className="divide-y divide-[var(--border)]">
-        {members.map((m) => (
-          <li key={m.id} className="flex items-center gap-3 px-5 py-3">
-            <Avatar name={m.name} />
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-[14px] font-medium">
-                {m.name}
-                {m.id === meId && (
-                  <span className="ml-1.5 text-[12px] font-normal text-[var(--text-faint)]">
-                    you
-                  </span>
-                )}
-              </p>
-              <p className="truncate text-[12px] text-[var(--text-muted)]">{m.email}</p>
-            </div>
-            {m.stripeOnboardingStatus === "active" ? (
-              <Badge tone="positive">
-                <CheckIcon className="h-3 w-3" />
-                Can receive
-              </Badge>
-            ) : (
-              <Badge tone="neutral">No payouts</Badge>
-            )}
-          </li>
-        ))}
-      </ul>
+  async function confirmRemove() {
+    if (!removing) return;
+    setRemoveBusy(true);
+    setRemoveError(null);
+    try {
+      const res = await api<{ left: boolean }>(
+        `/api/groups/${groupId}/members/${removing.id}`,
+        { method: "DELETE" }
+      );
+      setRemoving(null);
+      if (res.left) onLeft();
+      else onChanged();
+    } catch (e) {
+      setRemoveError(e instanceof Error ? e.message : "Couldn't remove them.");
+    } finally {
+      setRemoveBusy(false);
+    }
+  }
 
-      <form onSubmit={addMember} noValidate className="flex flex-col gap-3 border-t border-[var(--border)] p-5">
-        {formError && <Alert>{formError}</Alert>}
-        <Field label="Add a member" error={fieldError} hint="They need a Squared account.">
-          {({ id, describedBy, invalid }) => (
-            <Input
-              id={id}
-              aria-describedby={describedBy}
-              type="email"
-              inputMode="email"
-              placeholder="friend@example.com"
-              value={email}
-              invalid={invalid}
-              onChange={(e) => {
-                setEmail(e.target.value);
-                if (fieldError) setFieldError(undefined);
-              }}
-            />
-          )}
-        </Field>
-        <Button type="submit" variant="secondary" loading={submitting} className="w-full">
-          <PlusIcon className="h-4 w-4" />
-          Add member
-        </Button>
-      </form>
-    </Card>
+  return (
+    <>
+      <Card className="h-fit">
+        <CardHeader title="Members" description="Everyone splitting costs here." />
+        <ul className="divide-y divide-[var(--border)]">
+          {members.map((m) => {
+            const self = m.id === meId;
+            // You can always leave; only the owner can remove someone else.
+            const canRemove = self || isOwner;
+            return (
+              <li key={m.id} className="group/member flex items-center gap-3 px-5 py-3">
+                <Avatar name={m.name} />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[14px] font-medium">
+                    {m.name}
+                    {self && (
+                      <span className="ml-1.5 text-[12px] font-normal text-[var(--text-faint)]">
+                        you
+                      </span>
+                    )}
+                    {m.id === createdBy && (
+                      <span className="ml-1.5 text-[12px] font-normal text-[var(--text-faint)]">
+                        owner
+                      </span>
+                    )}
+                  </p>
+                  <p className="truncate text-[12px] text-[var(--text-muted)]">{m.email}</p>
+                </div>
+                {m.stripeOnboardingStatus === "active" ? (
+                  <Badge tone="positive">
+                    <CheckIcon className="h-3 w-3" />
+                    Can receive
+                  </Badge>
+                ) : (
+                  <Badge tone="neutral">No payouts</Badge>
+                )}
+                {canRemove && members.length > 1 && (
+                  <IconButton
+                    label={self ? "Leave this group" : `Remove ${m.name}`}
+                    onClick={() => setRemoving(m)}
+                    className="opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover/member:opacity-100 hover:text-[var(--negative)]"
+                  >
+                    <XIcon className="h-4 w-4" />
+                  </IconButton>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+
+        <form onSubmit={addMember} noValidate className="flex flex-col gap-3 border-t border-[var(--border)] p-5">
+          {formError && <Alert>{formError}</Alert>}
+          <Field label="Add a member" error={fieldError} hint="They need a Squared account.">
+            {({ id, describedBy, invalid }) => (
+              <Input
+                id={id}
+                aria-describedby={describedBy}
+                type="email"
+                inputMode="email"
+                placeholder="friend@example.com"
+                value={email}
+                invalid={invalid}
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  if (fieldError) setFieldError(undefined);
+                }}
+              />
+            )}
+          </Field>
+          <Button type="submit" variant="secondary" loading={submitting} className="w-full">
+            <PlusIcon className="h-4 w-4" />
+            Add member
+          </Button>
+        </form>
+      </Card>
+
+      <ConfirmDialog
+        open={removing !== null}
+        onClose={() => {
+          setRemoving(null);
+          setRemoveError(null);
+        }}
+        onConfirm={confirmRemove}
+        title={removing?.id === meId ? "Leave this group?" : "Remove this member?"}
+        body={
+          removing?.id === meId
+            ? "You'll lose access to this group's expenses and balances. You can only leave once you're settled up."
+            : `${removing?.name} will be removed from the group. This is only possible once they're settled up.`
+        }
+        confirmLabel={removing?.id === meId ? "Leave group" : "Remove member"}
+        loading={removeBusy}
+        error={removeError}
+      />
+    </>
   );
 }
-
-type ExpenseErrors = {
-  description?: string;
-  amount?: string;
-  split?: string;
-  perUser?: Record<string, string>;
-};
 
 function AddExpenseCard({
   groupId,
@@ -680,325 +847,28 @@ function AddExpenseCard({
   meId: string;
   onChanged: () => void;
 }) {
-  const [description, setDescription] = useState("");
-  const [amount, setAmount] = useState("");
-  const [paidBy, setPaidBy] = useState(meId);
-  const [splitType, setSplitType] = useState<SplitType>("equal");
-  // null means "everyone", so a member added later is included automatically
-  // without syncing state back to props.
-  const [selected, setSelected] = useState<Set<string> | null>(null);
-  const [perUser, setPerUser] = useState<Record<string, string>>({});
-  const [errors, setErrors] = useState<ExpenseErrors>({});
-  const [formError, setFormError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-  const [savedLabel, setSavedLabel] = useState<string | null>(null);
-
-  const participants = useMemo(
-    () => selected ?? new Set(members.map((m) => m.id)),
-    [selected, members]
-  );
-
-  const amountCents = parseDollarsToCents(amount);
-
-  // A running total so a mismatched exact/percentage split is visible before
-  // submitting rather than coming back as a server error.
-  const allocated = useMemo(() => {
-    if (splitType === "equal") return null;
-    let total = 0;
-    for (const m of members) {
-      const raw = perUser[m.id]?.trim();
-      if (!raw) continue;
-      const value = splitType === "exact" ? parseDollarsToCents(raw) : Number(raw);
-      if (value === null || Number.isNaN(value)) return null;
-      total += value;
-    }
-    return total;
-  }, [splitType, perUser, members]);
-
-  function toggleParticipant(id: string) {
-    const next = new Set(participants);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    setSelected(next);
-  }
-
-  function validate(): ExpenseErrors {
-    const next: ExpenseErrors = {};
-    if (!description.trim()) next.description = "What was this for?";
-    if (!amount.trim()) next.amount = "Enter an amount.";
-    else if (amountCents === null)
-      next.amount = "Use a number like 24.50 — no symbols.";
-    else if (amountCents === 0) next.amount = "Amount must be more than zero.";
-
-    if (splitType === "equal") {
-      if (participants.size === 0) next.split = "Pick at least one person.";
-    } else if (allocated === null) {
-      next.split = "Every value must be a number.";
-    } else if (splitType === "exact" && amountCents !== null && allocated !== amountCents) {
-      const diff = amountCents - allocated;
-      next.split =
-        diff > 0
-          ? `${formatCents(diff)} still unallocated.`
-          : `${formatCents(-diff)} over the total.`;
-    } else if (splitType === "percentage" && Math.abs(allocated - 100) > 0.001) {
-      next.split = `Percentages add up to ${allocated}%, not 100%.`;
-    }
-    return next;
-  }
-
-  async function submit(event: React.FormEvent) {
-    event.preventDefault();
-    setFormError(null);
-
-    const found = validate();
-    setErrors(found);
-    if (Object.keys(found).length > 0) return;
-
-    const split =
-      splitType === "equal"
-        ? { type: "equal" as const, participants: [...participants] }
-        : splitType === "exact"
-          ? {
-              type: "exact" as const,
-              shares: members
-                .filter((m) => perUser[m.id]?.trim())
-                .map((m) => ({
-                  userId: m.id,
-                  amountCents: parseDollarsToCents(perUser[m.id].trim())!,
-                })),
-            }
-          : {
-              type: "percentage" as const,
-              shares: members
-                .filter((m) => perUser[m.id]?.trim())
-                .map((m) => ({ userId: m.id, percent: Number(perUser[m.id].trim()) })),
-            };
-
-    setSubmitting(true);
-    try {
-      await api(`/api/groups/${groupId}/expenses`, {
-        method: "POST",
-        body: {
-          description: description.trim(),
-          amountCents: amountCents!,
-          paidBy,
-          split,
-        },
-      });
-      const label = description.trim();
-      setDescription("");
-      setAmount("");
-      setPerUser({});
-      setErrors({});
-      // Refetch balances, expenses, and the settle-up plan together.
-      onChanged();
-      setSavedLabel(label);
-      setTimeout(() => setSavedLabel(null), 3000);
-    } catch (e) {
-      setFormError(e instanceof Error ? e.message : "Couldn't add the expense.");
-    } finally {
-      setSubmitting(false);
-    }
-  }
+  const [saved, setSaved] = useState<string | null>(null);
 
   return (
     <Card>
       <CardHeader title="Add an expense" description="Balances update the moment you save." />
-      {/* noValidate is deliberate: the browser's native bubbles block submit
-          silently and can't be styled, which reads to the user as a dead
-          button. All validation is ours, and every message is visible. */}
-      <form onSubmit={submit} noValidate className="flex flex-col gap-4 p-5">
-        {formError && <Alert>{formError}</Alert>}
-        {savedLabel && (
-          <div className="flex items-center gap-2 rounded-lg border border-[var(--positive)]/25 bg-[var(--positive-subtle)] px-3 py-2 text-[13px] text-[var(--positive)]">
-            <CheckIcon className="h-4 w-4 shrink-0" />
-            Added &ldquo;{savedLabel}&rdquo; and updated balances.
-          </div>
-        )}
-
-        <div className="grid gap-4 sm:grid-cols-[1fr_140px]">
-          <Field label="Description" error={errors.description} required>
-            {({ id, describedBy, invalid }) => (
-              <Input
-                id={id}
-                aria-describedby={describedBy}
-                placeholder="Groceries"
-                maxLength={200}
-                value={description}
-                invalid={invalid}
-                onChange={(e) => {
-                  setDescription(e.target.value);
-                  if (errors.description)
-                    setErrors((p) => ({ ...p, description: undefined }));
-                }}
-              />
-            )}
-          </Field>
-
-          <Field label="Amount" error={errors.amount} required>
-            {({ id, describedBy, invalid }) => (
-              <div className="relative">
-                <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[15px] text-[var(--text-faint)]">
-                  $
-                </span>
-                <Input
-                  id={id}
-                  aria-describedby={describedBy}
-                  inputMode="decimal"
-                  placeholder="0.00"
-                  className="tnum pl-7"
-                  value={amount}
-                  invalid={invalid}
-                  onChange={(e) => {
-                    setAmount(e.target.value);
-                    if (errors.amount) setErrors((p) => ({ ...p, amount: undefined }));
-                  }}
-                />
-              </div>
-            )}
-          </Field>
+      {saved && (
+        <div className="mx-5 mt-5 flex items-center gap-2 rounded-lg border border-[var(--positive)]/25 bg-[var(--positive-subtle)] px-3 py-2 text-[13px] text-[var(--positive)]">
+          <CheckIcon className="h-4 w-4 shrink-0" />
+          Added &ldquo;{saved}&rdquo; and updated balances.
         </div>
-
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Paid by">
-            {({ id }) => (
-              <Select id={id} value={paidBy} onChange={(e) => setPaidBy(e.target.value)}>
-                {members.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.id === meId ? "You" : m.name}
-                  </option>
-                ))}
-              </Select>
-            )}
-          </Field>
-
-          <Field label="How to split">
-            {({ id }) => (
-              <Select
-                id={id}
-                value={splitType}
-                onChange={(e) => {
-                  setSplitType(e.target.value as SplitType);
-                  setErrors((p) => ({ ...p, split: undefined }));
-                }}
-              >
-                <option value="equal">Equally</option>
-                <option value="exact">Exact amounts</option>
-                <option value="percentage">Percentages</option>
-              </Select>
-            )}
-          </Field>
-        </div>
-
-        <fieldset className="rounded-lg border border-[var(--border)] p-4">
-          <legend className="px-1.5 text-[13px] font-medium">
-            {splitType === "equal" ? "Split between" : "Amount per person"}
-          </legend>
-
-          {splitType === "equal" ? (
-            <div className="flex flex-wrap gap-2">
-              {members.map((m) => {
-                const on = participants.has(m.id);
-                return (
-                  <button
-                    key={m.id}
-                    type="button"
-                    aria-pressed={on}
-                    onClick={() => toggleParticipant(m.id)}
-                    className={cx(
-                      "inline-flex h-9 cursor-pointer items-center gap-2 rounded-full border px-3 text-[13px] font-medium transition-colors duration-150",
-                      on
-                        ? "border-[var(--brand)] bg-[var(--brand-subtle)] text-[var(--brand)]"
-                        : "border-[var(--border-strong)] text-[var(--text-muted)] hover:bg-[var(--surface-subtle)]"
-                    )}
-                  >
-                    <span
-                      className={cx(
-                        "grid h-4 w-4 place-items-center rounded-full border",
-                        on
-                          ? "border-[var(--brand)] bg-[var(--brand)] text-[var(--on-brand)]"
-                          : "border-[var(--border-strong)]"
-                      )}
-                    >
-                      {on && <CheckIcon className="h-2.5 w-2.5" />}
-                    </span>
-                    {m.id === meId ? "You" : m.name}
-                  </button>
-                );
-              })}
-            </div>
-          ) : (
-            <div className="flex flex-col gap-2.5">
-              {members.map((m) => (
-                <div key={m.id} className="flex items-center gap-3">
-                  <Avatar name={m.name} className="h-7 w-7 text-[11px]" />
-                  <span className="flex-1 truncate text-[14px]">
-                    {m.id === meId ? "You" : m.name}
-                  </span>
-                  <div className="relative w-28">
-                    {splitType === "exact" && (
-                      <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[14px] text-[var(--text-faint)]">
-                        $
-                      </span>
-                    )}
-                    <Input
-                      inputMode="decimal"
-                      aria-label={`${splitType === "exact" ? "Amount" : "Percentage"} for ${m.name}`}
-                      placeholder={splitType === "exact" ? "0.00" : "0"}
-                      className={cx("tnum h-9 text-[14px]", splitType === "exact" && "pl-6")}
-                      value={perUser[m.id] ?? ""}
-                      onChange={(e) => {
-                        setPerUser((prev) => ({ ...prev, [m.id]: e.target.value }));
-                        if (errors.split) setErrors((p) => ({ ...p, split: undefined }));
-                      }}
-                    />
-                    {splitType === "percentage" && (
-                      <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[14px] text-[var(--text-faint)]">
-                        %
-                      </span>
-                    )}
-                  </div>
-                </div>
-              ))}
-
-              {/* Live running total: the mismatch is visible before submit. */}
-              {allocated !== null && (
-                <p className="tnum mt-1 flex justify-between border-t border-[var(--border)] pt-2.5 text-[13px]">
-                  <span className="text-[var(--text-muted)]">Allocated</span>
-                  <span
-                    className={cx(
-                      "font-medium",
-                      splitType === "exact"
-                        ? amountCents !== null && allocated === amountCents
-                          ? "text-[var(--positive)]"
-                          : "text-[var(--text)]"
-                        : Math.abs(allocated - 100) < 0.001
-                          ? "text-[var(--positive)]"
-                          : "text-[var(--text)]"
-                    )}
-                  >
-                    {splitType === "exact"
-                      ? `${formatCents(allocated)}${amountCents !== null ? ` of ${formatCents(amountCents)}` : ""}`
-                      : `${allocated}% of 100%`}
-                  </span>
-                </p>
-              )}
-            </div>
-          )}
-
-          {errors.split && (
-            <p role="alert" className="mt-3 flex items-center gap-1.5 text-[13px] text-[var(--negative)]">
-              <AlertIcon className="h-3.5 w-3.5 shrink-0" />
-              {errors.split}
-            </p>
-          )}
-        </fieldset>
-
-        <Button type="submit" loading={submitting} className="self-start">
-          <PlusIcon className="h-4 w-4" />
-          Add expense
-        </Button>
-      </form>
+      )}
+      <ExpenseForm
+        members={members}
+        meId={meId}
+        submitLabel="Add expense"
+        onSubmit={async (payload) => {
+          await api(`/api/groups/${groupId}/expenses`, { method: "POST", body: payload });
+          onChanged();
+          setSaved(payload.description);
+          setTimeout(() => setSaved(null), 3000);
+        }}
+      />
     </Card>
   );
 }

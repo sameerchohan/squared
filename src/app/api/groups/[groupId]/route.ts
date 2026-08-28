@@ -1,4 +1,5 @@
 import { eq } from "drizzle-orm";
+import { z } from "zod";
 import { db } from "@/db";
 import { groupMembers, groups, users } from "@/db/schema";
 import { requireUserId } from "@/server/auth";
@@ -34,5 +35,34 @@ export const GET = apiHandler(
       .orderBy(groupMembers.joinedAt);
 
     return Response.json({ group, members });
+  }
+);
+
+const renameSchema = z.object({ name: z.string().trim().min(1).max(100) });
+
+export const PATCH = apiHandler(
+  async (req, ctx: RouteContext<"/api/groups/[groupId]">) => {
+    const userId = await requireUserId();
+    const { groupId } = await ctx.params;
+    await requireGroupMember(userId, groupId);
+
+    const [group] = await db
+      .select({ createdBy: groups.createdBy })
+      .from(groups)
+      .where(eq(groups.id, groupId))
+      .limit(1);
+    if (!group) throw new ApiError(404, "Group not found");
+    if (group.createdBy !== userId) {
+      throw new ApiError(403, "Only the group's creator can rename it.");
+    }
+
+    const { name } = renameSchema.parse(await req.json());
+    const [updated] = await db
+      .update(groups)
+      .set({ name })
+      .where(eq(groups.id, groupId))
+      .returning();
+
+    return Response.json({ group: updated });
   }
 );
