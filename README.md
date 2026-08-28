@@ -120,8 +120,15 @@ npm run db:migrate
 npm run dev                 # http://localhost:3000
 ```
 
+Seed a realistic dataset — five people across three groups with equal,
+exact, and percentage splits, plus settlement history:
+
 ```bash
-npm test                    # 52 Vitest cases
+node scripts/seed.mjs --reset    # sign in as maya@squared.demo / demo1234
+```
+
+```bash
+npm test                    # 59 Vitest cases
 npm run db:generate         # regenerate migrations after editing src/db/schema.ts
 docker build -t squared .   # production image (311 MB, non-root)
 ```

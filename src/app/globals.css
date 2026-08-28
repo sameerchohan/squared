@@ -8,81 +8,67 @@
    ledgers and banknotes, money-adjacent without being literal — against clay
    red rather than fire-engine red, and ochre for caution.
 
+   Every token is declared once with light-dark(), so the two themes can't
+   drift apart the way duplicated blocks always eventually do. `color-scheme`
+   picks which half applies: the bare :root follows the operating system,
+   and an explicit data-theme overrides it. That also makes native controls,
+   scrollbars, and form widgets follow the theme for free.
+
    Money direction is never signalled by color alone; every figure is paired
    with "owes" or "is owed" in text.
 --------------------------------------------------------------------------- */
 
 :root {
-  --bg: #faf9f6;
-  --surface: #ffffff;
-  --surface-subtle: #f3f1ec;
-  --text: #1c1a17;
-  --text-muted: #6e6862;
-  --text-faint: #9a938b;
-  --border: #e6e2da;
-  --border-strong: #d5cfc4;
+  color-scheme: light dark;
 
-  --brand: #1b4d3e;
-  --brand-hover: #164034;
-  --brand-active: #102e26;
-  --brand-ring: #2e7d66;
-  --on-brand: #ffffff;
-  --brand-subtle: #eaf1ee;
+  --bg: light-dark(#faf9f6, #171613);
+  --surface: light-dark(#ffffff, #201e1a);
+  --surface-subtle: light-dark(#f3f1ec, #2a2723);
+  --text: light-dark(#1c1a17, #f5f2ec);
+  --text-muted: light-dark(#6e6862, #a8a29a);
+  --text-faint: light-dark(#9a938b, #7c766e);
+  --border: light-dark(#e6e2da, #302d28);
+  --border-strong: light-dark(#d5cfc4, #45403a);
 
-  --positive: #0b6b4e;
-  --positive-subtle: #e7f5ef;
-  --negative: #b4402f;
-  --negative-subtle: #fbeeeb;
-  --warning: #8f5f12;
-  --warning-subtle: #fbf3e4;
+  --brand: light-dark(#1b4d3e, #4fa98b);
+  --brand-hover: light-dark(#164034, #6bbfa2);
+  --brand-active: light-dark(#102e26, #86d3b8);
+  --brand-ring: light-dark(#2e7d66, #4fa98b);
+  --on-brand: light-dark(#ffffff, #10231c);
+  --brand-subtle: light-dark(#eaf1ee, #163027);
 
-  /* The masthead is a deeper cut of the brand so the band reads as a
-     distinct plane rather than a wide button. */
-  --masthead: #143b30;
-  --masthead-edge: #1d5445;
-  --on-masthead: #f4faf7;
-  --on-masthead-muted: #a9c9bd;
+  --positive: light-dark(#0b6b4e, #4cc493);
+  --positive-subtle: light-dark(#e7f5ef, #12291f);
+  --negative: light-dark(#b4402f, #ef8a75);
+  --negative-subtle: light-dark(#fbeeeb, #2e1a15);
+  --warning: light-dark(#8f5f12, #d9a441);
+  --warning-subtle: light-dark(#fbf3e4, #2c2113);
 
-  --shadow-sm: 0 1px 2px 0 rgb(28 26 23 / 0.05);
-  --shadow-md: 0 1px 3px 0 rgb(28 26 23 / 0.08), 0 1px 2px -1px rgb(28 26 23 / 0.06);
-  --shadow-lg: 0 12px 28px -8px rgb(28 26 23 / 0.14), 0 4px 10px -4px rgb(28 26 23 / 0.07);
+  /* The masthead stays a deep pine plane in both themes — it is the app's
+     identity, not a surface that inverts. */
+  --masthead: light-dark(#143b30, #10241e);
+  --masthead-edge: light-dark(#1d5445, #1c3a31);
+  --on-masthead: light-dark(#f4faf7, #eef6f2);
+  --on-masthead-muted: light-dark(#a9c9bd, #8faea2);
+
+  /* Shadows carry a color token rather than a whole value, since light-dark()
+     resolves colors only. */
+  --shadow-tint: light-dark(rgb(28 26 23 / 0.05), rgb(0 0 0 / 0.4));
+  --shadow-tint-strong: light-dark(rgb(28 26 23 / 0.09), rgb(0 0 0 / 0.55));
+
+  --shadow-sm: 0 1px 2px 0 var(--shadow-tint);
+  --shadow-md: 0 1px 3px 0 var(--shadow-tint), 0 1px 2px -1px var(--shadow-tint);
+  --shadow-lg: 0 12px 28px -8px var(--shadow-tint-strong),
+    0 4px 10px -4px var(--shadow-tint);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    /* Warm charcoal, not blue-black — the paper metaphor survives the dark. */
-    --bg: #171613;
-    --surface: #201e1a;
-    --surface-subtle: #2a2723;
-    --text: #f5f2ec;
-    --text-muted: #a8a29a;
-    --text-faint: #7c766e;
-    --border: #302d28;
-    --border-strong: #45403a;
+/* An explicit choice wins over the operating system, in both directions. */
+:root[data-theme="light"] {
+  color-scheme: light;
+}
 
-    --brand: #4fa98b;
-    --brand-hover: #6bbfa2;
-    --brand-active: #86d3b8;
-    --brand-ring: #4fa98b;
-    --on-brand: #10231c;
-    --brand-subtle: #163027;
-
-    --positive: #4cc493;
-    --positive-subtle: #12291f;
-    --negative: #ef8a75;
-    --negative-subtle: #2e1a15;
-    --warning: #d9a441;
-    --warning-subtle: #2c2113;
-
-    --masthead: #10241e;
-    --masthead-edge: #1c3a31;
-    --on-masthead: #eef6f2;
-    --on-masthead-muted: #8faea2;
-
-    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.4);
-    --shadow-md: 0 1px 3px 0 rgb(0 0 0 / 0.5), 0 1px 2px -1px rgb(0 0 0 / 0.4);
-    --shadow-lg: 0 12px 28px -8px rgb(0 0 0 / 0.6), 0 4px 10px -4px rgb(0 0 0 / 0.4);
-  }
+:root[data-theme="dark"] {
+  color-scheme: dark;
 }
 
 @theme inline {

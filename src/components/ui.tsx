@@ -1,6 +1,6 @@
 "use client";
 
-import { forwardRef, useId } from "react";
+import { forwardRef, useCallback, useEffect, useId, useRef } from "react";
 import { AlertIcon, SpinnerIcon } from "./icons";
 
 /* -------------------------------------------------------------------------
@@ -301,5 +301,178 @@ export function Avatar({ name, className }: { name: string; className?: string }
     >
       {initials}
     </span>
+  );
+}
+
+/* -------------------------------------------------------------------------
+   Dialog
+
+   Escape closes it, the scrim closes it, focus moves inside on open and
+   returns to the trigger on close, and Tab cycles within — a modal that
+   leaks focus to the page behind it is unusable with a keyboard.
+------------------------------------------------------------------------- */
+export function Dialog({
+  open,
+  onClose,
+  title,
+  description,
+  children,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  description?: string;
+  children: React.ReactNode;
+}) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const restoreRef = useRef<HTMLElement | null>(null);
+  const titleId = useId();
+  const descId = useId();
+
+  const handleKeyDown = useCallback(
+    (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab" || !panelRef.current) return;
+
+      const focusable = panelRef.current.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    },
+    [onClose]
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    restoreRef.current = document.activeElement as HTMLElement | null;
+    document.addEventListener("keydown", handleKeyDown);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    const timer = window.setTimeout(() => {
+      panelRef.current
+        ?.querySelector<HTMLElement>(
+          'input:not([disabled]), button:not([disabled]), select:not([disabled])'
+        )
+        ?.focus();
+    }, 20);
+
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+      window.clearTimeout(timer);
+      restoreRef.current?.focus?.();
+    };
+  }, [open, handleKeyDown]);
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 sm:items-center">
+      {/* The scrim is dark enough to isolate the panel rather than merely
+          tint the page behind it. */}
+      <div
+        className="fixed inset-0 bg-[#100f0c]/55 backdrop-blur-[2px]"
+        onClick={onClose}
+        aria-hidden="true"
+      />
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={description ? descId : undefined}
+        className="animate-in relative z-10 w-full max-w-lg rounded-xl border border-[var(--border)] bg-[var(--surface)] shadow-[var(--shadow-lg)]"
+      >
+        <div className="border-b border-[var(--border)] px-5 py-4">
+          <h2 id={titleId} className="text-[16px] font-semibold tracking-tight">
+            {title}
+          </h2>
+          {description && (
+            <p id={descId} className="mt-0.5 text-[13px] text-[var(--text-muted)]">
+              {description}
+            </p>
+          )}
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/* Destructive actions always confirm, and the confirmation names what will
+   happen rather than asking "are you sure?". */
+export function ConfirmDialog({
+  open,
+  onClose,
+  onConfirm,
+  title,
+  body,
+  confirmLabel,
+  loading,
+  error,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+  title: string;
+  body: string;
+  confirmLabel: string;
+  loading?: boolean;
+  error?: string | null;
+}) {
+  return (
+    <Dialog open={open} onClose={onClose} title={title}>
+      <div className="flex flex-col gap-4 p-5">
+        <p className="text-[14px] leading-relaxed text-[var(--text-muted)]">{body}</p>
+        {error && <Alert>{error}</Alert>}
+        <div className="flex justify-end gap-2">
+          <Button variant="secondary" size="sm" onClick={onClose} disabled={loading}>
+            Cancel
+          </Button>
+          <Button variant="danger" size="sm" onClick={onConfirm} loading={loading}>
+            {confirmLabel}
+          </Button>
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+
+export function IconButton({
+  label,
+  children,
+  className,
+  ...rest
+}: React.ButtonHTMLAttributes<HTMLButtonElement> & { label: string }) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      className={cx(
+        // 32px visual, but padding pushes the hit area toward the 44px floor.
+        "grid h-8 w-8 cursor-pointer place-items-center rounded-lg text-[var(--text-faint)]",
+        "transition-colors duration-150 hover:bg-[var(--surface-subtle)] hover:text-[var(--text)]",
+        "disabled:pointer-events-none disabled:opacity-40",
+        className
+      )}
+      {...rest}
+    >
+      {children}
+    </button>
   );
 }
