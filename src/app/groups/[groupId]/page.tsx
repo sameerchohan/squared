@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AppShell } from "@/components/app-shell";
+import { AppShell, Stat } from "@/components/app-shell";
 import {
   Alert,
   Avatar,
@@ -140,10 +140,15 @@ export default function GroupPage() {
 
   if (!me || !group || !balances) {
     return (
-      <div className="mx-auto w-full max-w-5xl px-5 py-8">
-        <Skeleton className="h-8 w-56" />
-        <div className="mt-6 grid gap-6 lg:grid-cols-[1fr_320px]">
-          <Skeleton className="h-72 w-full" />
+      <div>
+        <div className="h-16 w-full bg-[var(--masthead)]" />
+        <div className="bg-[var(--masthead)] pb-9 pt-7">
+          <div className="mx-auto w-full max-w-6xl px-5 sm:px-8">
+            <Skeleton className="h-4 w-24 bg-white/10" />
+            <Skeleton className="mt-3 h-9 w-64 bg-white/10" />
+          </div>
+        </div>
+        <div className="mx-auto w-full max-w-6xl px-5 py-8 sm:px-8">
           <Skeleton className="h-72 w-full" />
         </div>
       </div>
@@ -153,39 +158,75 @@ export default function GroupPage() {
   const myBalance =
     balances.balances.find((b) => b.userId === me.id)?.netCents ?? 0;
 
+  const totalSpend = expenses.reduce((sum, e) => sum + e.amountCents, 0);
+
   return (
-    <AppShell user={me}>
-      <div className="animate-in">
-        <nav aria-label="Breadcrumb" className="mb-3">
+    <AppShell
+      user={me}
+      hero={
+        <div className="animate-in">
           <Link
             href="/"
-            className="inline-flex items-center gap-1.5 rounded-md text-[13px] text-[var(--text-muted)] transition-colors hover:text-[var(--text)]"
+            className="eyebrow inline-flex items-center gap-1.5 rounded-md text-[var(--on-masthead-muted)] transition-colors duration-150 hover:text-[var(--on-masthead)]"
           >
             <ArrowRightIcon className="h-3.5 w-3.5 rotate-180" />
             All groups
           </Link>
-        </nav>
 
-        <header className="flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <h1 className="text-[26px] font-semibold tracking-tight">{group.name}</h1>
-            <p className="mt-1 flex items-center gap-1.5 text-[14px] text-[var(--text-muted)]">
-              <UsersIcon className="h-4 w-4" />
-              {members.length} member{members.length === 1 ? "" : "s"}
-              <span aria-hidden="true">·</span>
-              {expenses.length} expense{expenses.length === 1 ? "" : "s"}
-            </p>
+          <div className="mt-3 flex flex-wrap items-end justify-between gap-x-8 gap-y-5">
+            <div className="min-w-0">
+              <h1 className="truncate text-[28px] font-semibold leading-tight tracking-tight sm:text-[34px]">
+                {group.name}
+              </h1>
+              <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[14px] text-[var(--on-masthead-muted)]">
+                <span className="inline-flex items-center gap-1.5">
+                  <UsersIcon className="h-4 w-4" />
+                  {members.length} member{members.length === 1 ? "" : "s"}
+                </span>
+                <span aria-hidden="true">·</span>
+                <span>{expenses.length} expense{expenses.length === 1 ? "" : "s"}</span>
+                <span aria-hidden="true">·</span>
+                <span className="tnum">{formatCents(totalSpend)} tracked</span>
+              </p>
+            </div>
+
+            {/* The one figure the page exists to answer, sized so it is read
+                first and never confused with a button. */}
+            <div className="flex flex-wrap gap-x-10 gap-y-5">
+              <Stat
+                label={
+                  myBalance === 0
+                    ? "Settled up"
+                    : myBalance > 0
+                      ? "You are owed"
+                      : "You owe"
+                }
+                value={formatCents(Math.abs(myBalance))}
+                size="lg"
+                tone={
+                  myBalance === 0 ? "muted" : myBalance > 0 ? "positive" : "negative"
+                }
+              />
+              {balances.suggestedTransfers.length > 0 && (
+                <Stat
+                  label="Transfers to clear"
+                  value={String(balances.suggestedTransfers.length)}
+                  tone="muted"
+                />
+              )}
+            </div>
           </div>
-          <YourPosition cents={myBalance} />
-        </header>
-
+        </div>
+      }
+    >
+      <div className="animate-in">
         {error && (
-          <div className="mt-5">
+          <div className="mb-6">
             <Alert>{error}</Alert>
           </div>
         )}
 
-        <div className="mt-7 grid gap-6 lg:grid-cols-[1fr_320px]">
+        <div className="mt-7 grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
           <div className="flex flex-col gap-6">
             <SettleUpCard
               groupId={groupId}
@@ -217,35 +258,6 @@ export default function GroupPage() {
         </div>
       </div>
     </AppShell>
-  );
-}
-
-/* The single number the user came to see, stated in words as well as color. */
-function YourPosition({ cents }: { cents: number }) {
-  const settled = cents === 0;
-  return (
-    <div
-      className={cx(
-        "rounded-xl border px-4 py-3 text-right",
-        settled && "border-[var(--border)] bg-[var(--surface)]",
-        cents > 0 && "border-[var(--positive)]/25 bg-[var(--positive-subtle)]",
-        cents < 0 && "border-[var(--negative)]/25 bg-[var(--negative-subtle)]"
-      )}
-    >
-      <p className="text-[12px] font-medium uppercase tracking-wide text-[var(--text-muted)]">
-        {settled ? "You're settled up" : cents > 0 ? "You are owed" : "You owe"}
-      </p>
-      <p
-        className={cx(
-          "tnum mt-0.5 text-[24px] font-semibold leading-none",
-          settled && "text-[var(--text-muted)]",
-          cents > 0 && "text-[var(--positive)]",
-          cents < 0 && "text-[var(--negative)]"
-        )}
-      >
-        {formatCents(Math.abs(cents))}
-      </p>
-    </div>
   );
 }
 

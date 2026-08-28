@@ -2,8 +2,8 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
-import { AppShell } from "@/components/app-shell";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { AppShell, Stat } from "@/components/app-shell";
 import {
   Alert,
   Badge,
@@ -14,6 +14,7 @@ import {
   Field,
   Input,
   Skeleton,
+  cx,
 } from "@/components/ui";
 import {
   ArrowRightIcon,
@@ -23,6 +24,7 @@ import {
   UsersIcon,
 } from "@/components/icons";
 import { api, UnauthorizedError } from "@/lib/client";
+import { formatCents } from "@/lib/format";
 
 type Me = {
   id: string;
@@ -35,6 +37,7 @@ type GroupSummary = {
   name: string;
   createdAt: string;
   memberCount: number;
+  netCents: number;
 };
 
 export default function HomePage() {
@@ -69,49 +72,83 @@ export default function HomePage() {
     };
   }, [reloadKey, router]);
 
+  const totals = useMemo(() => {
+    const owed = (groups ?? [])
+      .filter((g) => g.netCents > 0)
+      .reduce((sum, g) => sum + g.netCents, 0);
+    const owe = (groups ?? [])
+      .filter((g) => g.netCents < 0)
+      .reduce((sum, g) => sum - g.netCents, 0);
+    return { owed, owe, net: owed - owe };
+  }, [groups]);
+
   if (!me || groups === null) {
     return (
-      <div className="mx-auto w-full max-w-5xl px-5 py-8">
-        <Skeleton className="h-8 w-48" />
-        <Skeleton className="mt-6 h-24 w-full" />
-        <Skeleton className="mt-6 h-64 w-full" />
+      <div>
+        <div className="h-16 w-full bg-[var(--masthead)]" />
+        <div className="bg-[var(--masthead)] pb-9 pt-7">
+          <div className="mx-auto w-full max-w-6xl px-5 sm:px-8">
+            <Skeleton className="h-4 w-28 bg-white/10" />
+            <Skeleton className="mt-3 h-10 w-52 bg-white/10" />
+          </div>
+        </div>
+        <div className="mx-auto w-full max-w-6xl px-5 py-8 sm:px-8">
+          <Skeleton className="h-72 w-full" />
+        </div>
       </div>
     );
   }
 
   return (
-    <AppShell user={me}>
-      <div className="animate-in">
-        <div className="flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <h1 className="text-[22px] font-semibold tracking-tight">Your groups</h1>
-            <p className="mt-1 text-[14px] text-[var(--text-muted)]">
-              {groups.length === 0
-                ? "Create a group to start tracking shared expenses."
-                : `${groups.length} group${groups.length === 1 ? "" : "s"}`}
-            </p>
-          </div>
-        </div>
+    <AppShell
+      user={me}
+      hero={
+        <div className="animate-in">
+          <p className="eyebrow text-[var(--on-masthead-muted)]">Overview</p>
+          <h1 className="mt-2 text-[28px] font-semibold leading-tight tracking-tight sm:text-[32px]">
+            {totals.net === 0
+              ? "You're all settled up"
+              : totals.net > 0
+                ? `You're owed ${formatCents(totals.net)}`
+                : `You owe ${formatCents(-totals.net)}`}
+          </h1>
+          <p className="mt-1.5 max-w-lg text-[14px] leading-relaxed text-[var(--on-masthead-muted)]">
+            {groups.length === 0
+              ? "Create a group to start tracking shared expenses."
+              : `Across ${groups.length} group${groups.length === 1 ? "" : "s"}.`}
+          </p>
 
+          {groups.length > 0 && (
+            <div className="mt-7 flex flex-wrap gap-x-12 gap-y-5 border-t border-white/10 pt-5">
+              <Stat label="Owed to you" value={formatCents(totals.owed)} tone="positive" />
+              <Stat label="You owe" value={formatCents(totals.owe)} tone="negative" />
+              <Stat
+                label="Groups"
+                value={String(groups.length)}
+                tone="muted"
+              />
+            </div>
+          )}
+        </div>
+      }
+    >
+      <div className="animate-in">
         {error && (
-          <div className="mt-5">
+          <div className="mb-6">
             <Alert>{error}</Alert>
           </div>
         )}
 
         <PaymentSetupCard status={me.stripeOnboardingStatus} onChanged={reload} />
 
-        <div className="mt-6 grid gap-6 lg:grid-cols-[1fr_320px]">
+        <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
           <Card>
-            <CardHeader
-              title="Groups"
-              description="Everyone you split expenses with."
-            />
+            <CardHeader title="Your groups" description="Balance shown is your position in each." />
             {groups.length === 0 ? (
               <EmptyState
                 icon={<UsersIcon className="h-5 w-5" />}
                 title="No groups yet"
-                description="A group is where you and your friends log shared expenses. Create one to get started."
+                description="A group is where you and your friends log shared expenses. Create your first one to get started."
               />
             ) : (
               <ul className="divide-y divide-[var(--border)]">
@@ -119,15 +156,47 @@ export default function HomePage() {
                   <li key={g.id}>
                     <Link
                       href={`/groups/${g.id}`}
-                      className="group flex items-center justify-between gap-4 px-5 py-4 transition-colors duration-150 hover:bg-[var(--surface-subtle)]"
+                      className="group relative flex items-center gap-4 py-4 pl-5 pr-4 transition-colors duration-150 hover:bg-[var(--surface-subtle)]"
                     >
-                      <div className="min-w-0">
+                      {/* A colored edge marks direction before the eye reaches
+                          the number — quicker to scan down a long list. */}
+                      <span
+                        aria-hidden="true"
+                        className={cx(
+                          "absolute inset-y-0 left-0 w-[3px]",
+                          g.netCents > 0 && "bg-[var(--positive)]",
+                          g.netCents < 0 && "bg-[var(--negative)]",
+                          g.netCents === 0 && "bg-transparent"
+                        )}
+                      />
+                      <div className="min-w-0 flex-1">
                         <p className="truncate text-[15px] font-medium">{g.name}</p>
                         <p className="mt-0.5 flex items-center gap-1.5 text-[13px] text-[var(--text-muted)]">
                           <UsersIcon className="h-3.5 w-3.5" />
                           {g.memberCount} member{g.memberCount === 1 ? "" : "s"}
                         </p>
                       </div>
+
+                      <div className="text-right">
+                        <p
+                          className={cx(
+                            "figure text-[17px]",
+                            g.netCents > 0 && "text-[var(--positive)]",
+                            g.netCents < 0 && "text-[var(--negative)]",
+                            g.netCents === 0 && "text-[var(--text-faint)]"
+                          )}
+                        >
+                          {formatCents(Math.abs(g.netCents))}
+                        </p>
+                        <p className="mt-0.5 text-[12px] text-[var(--text-muted)]">
+                          {g.netCents > 0
+                            ? "owed to you"
+                            : g.netCents < 0
+                              ? "you owe"
+                              : "settled"}
+                        </p>
+                      </div>
+
                       <ArrowRightIcon className="h-4 w-4 shrink-0 text-[var(--text-faint)] transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-[var(--brand)]" />
                     </Link>
                   </li>
@@ -153,7 +222,6 @@ function CreateGroupCard({ onCreated }: { onCreated: () => void }) {
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     setFormError(null);
-
     if (!name.trim()) {
       setFieldError("Give the group a name.");
       return;
@@ -164,8 +232,6 @@ function CreateGroupCard({ onCreated }: { onCreated: () => void }) {
       await api("/api/groups", { method: "POST", body: { name: name.trim() } });
       setName("");
       onCreated();
-      // A brief confirmation so the action visibly succeeded, rather than the
-      // field simply going blank.
       setJustCreated(true);
       setTimeout(() => setJustCreated(false), 2500);
     } catch (e) {
@@ -177,7 +243,7 @@ function CreateGroupCard({ onCreated }: { onCreated: () => void }) {
 
   return (
     <Card className="h-fit">
-      <CardHeader title="New group" description="Trip, apartment, dinner club." />
+      <CardHeader title="New group" description="A trip, an apartment, a dinner club." />
       <form onSubmit={submit} noValidate className="flex flex-col gap-4 p-5">
         {formError && <Alert>{formError}</Alert>}
         {justCreated && (
@@ -186,7 +252,6 @@ function CreateGroupCard({ onCreated }: { onCreated: () => void }) {
             Group created.
           </div>
         )}
-
         <Field label="Group name" error={fieldError} required>
           {({ id, describedBy, invalid }) => (
             <Input
@@ -203,7 +268,6 @@ function CreateGroupCard({ onCreated }: { onCreated: () => void }) {
             />
           )}
         </Field>
-
         <Button type="submit" loading={submitting} className="w-full">
           <PlusIcon className="h-4 w-4" />
           Create group
@@ -215,7 +279,12 @@ function CreateGroupCard({ onCreated }: { onCreated: () => void }) {
 
 const STATUS_COPY: Record<
   string,
-  { tone: "warning" | "positive" | "negative"; label: string; detail: string; action: string | null }
+  {
+    tone: "warning" | "positive" | "negative";
+    label: string;
+    detail: string;
+    action: string | null;
+  }
 > = {
   not_started: {
     tone: "warning",
@@ -257,6 +326,7 @@ function PaymentSetupCard({
   const [starting, setStarting] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const copy = STATUS_COPY[status] ?? STATUS_COPY.not_started;
+  const done = status === "active";
 
   async function startOnboarding() {
     setError(null);
@@ -272,8 +342,6 @@ function PaymentSetupCard({
     }
   }
 
-  // Webhooks drive status normally; this covers a missed delivery or local
-  // development without a forwarder running.
   async function refreshStatus() {
     setError(null);
     setSyncing(true);
@@ -288,17 +356,29 @@ function PaymentSetupCard({
   }
 
   return (
-    <Card className="mt-6 p-5">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="flex gap-3">
-          <div className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-[var(--surface-subtle)] text-[var(--text-muted)]">
-            <CardIcon className="h-4.5 w-4.5" />
+    <Card
+      className={cx(
+        "overflow-hidden",
+        !done && "border-[var(--warning)]/30"
+      )}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-4 p-5">
+        <div className="flex gap-3.5">
+          <div
+            className={cx(
+              "mt-0.5 grid h-10 w-10 shrink-0 place-items-center rounded-xl",
+              done
+                ? "bg-[var(--positive-subtle)] text-[var(--positive)]"
+                : "bg-[var(--warning-subtle)] text-[var(--warning)]"
+            )}
+          >
+            <CardIcon className="h-5 w-5" />
           </div>
           <div className="max-w-xl">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-[15px] font-semibold tracking-tight">{copy.label}</h2>
               <Badge tone={copy.tone}>
-                {status === "active" && <CheckIcon className="h-3 w-3" />}
+                {done && <CheckIcon className="h-3 w-3" />}
                 {status.replace("_", " ")}
               </Badge>
             </div>
@@ -322,11 +402,10 @@ function PaymentSetupCard({
         </div>
       </div>
       {error && (
-        <div className="mt-3">
+        <div className="px-5 pb-5">
           <Alert>{error}</Alert>
         </div>
       )}
     </Card>
   );
 }
-

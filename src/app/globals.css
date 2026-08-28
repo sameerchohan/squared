@@ -36,6 +36,13 @@
   --warning: #8f5f12;
   --warning-subtle: #fbf3e4;
 
+  /* The masthead is a deeper cut of the brand so the band reads as a
+     distinct plane rather than a wide button. */
+  --masthead: #143b30;
+  --masthead-edge: #1d5445;
+  --on-masthead: #f4faf7;
+  --on-masthead-muted: #a9c9bd;
+
   --shadow-sm: 0 1px 2px 0 rgb(28 26 23 / 0.05);
   --shadow-md: 0 1px 3px 0 rgb(28 26 23 / 0.08), 0 1px 2px -1px rgb(28 26 23 / 0.06);
   --shadow-lg: 0 12px 28px -8px rgb(28 26 23 / 0.14), 0 4px 10px -4px rgb(28 26 23 / 0.07);
@@ -67,6 +74,11 @@
     --warning: #d9a441;
     --warning-subtle: #2c2113;
 
+    --masthead: #10241e;
+    --masthead-edge: #1c3a31;
+    --on-masthead: #eef6f2;
+    --on-masthead-muted: #8faea2;
+
     --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.4);
     --shadow-md: 0 1px 3px 0 rgb(0 0 0 / 0.5), 0 1px 2px -1px rgb(0 0 0 / 0.4);
     --shadow-lg: 0 12px 28px -8px rgb(0 0 0 / 0.6), 0 4px 10px -4px rgb(0 0 0 / 0.4);
@@ -92,6 +104,9 @@
   --color-negative-subtle: var(--negative-subtle);
   --color-warning: var(--warning);
   --color-warning-subtle: var(--warning-subtle);
+  --color-masthead: var(--masthead);
+  --color-on-masthead: var(--on-masthead);
+  --color-on-masthead-muted: var(--on-masthead-muted);
   --font-sans: var(--font-plex-sans), ui-sans-serif, system-ui, sans-serif;
 }
 
@@ -143,4 +158,34 @@ body {
 
 .animate-in {
   animation: fade-rise 200ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* A barely-there hairline grid over the masthead. At 4% opacity it reads as
+   ledger paper rather than decoration — the eye registers texture without
+   resolving the lines. */
+.masthead-texture {
+  background-image:
+    linear-gradient(to right, rgb(255 255 255 / 0.04) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(255 255 255 / 0.04) 1px, transparent 1px);
+  background-size: 44px 44px;
+  -webkit-mask-image: radial-gradient(120% 120% at 50% 0%, #000 25%, transparent 78%);
+  mask-image: radial-gradient(120% 120% at 50% 0%, #000 25%, transparent 78%);
+}
+
+/* Display figures: large amounts get tight tracking so the number reads as a
+   single shape rather than a row of digits. */
+.figure {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+  letter-spacing: -0.02em;
+  font-weight: 600;
+}
+
+/* Micro-label above a figure. Uppercase and tracked wide so it recedes and
+   the number carries the hierarchy. */
+.eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
 }

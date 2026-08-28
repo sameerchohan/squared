@@ -1,7 +1,14 @@
-import { eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { groupMembers, groups } from "@/db/schema";
+import {
+  expenses,
+  expenseShares,
+  groupMembers,
+  groups,
+  settlements,
+} from "@/db/schema";
+import { computeNetBalances } from "@/lib/balances";
 import { requireUserId } from "@/server/auth";
 import { apiHandler } from "@/server/errors";
 
@@ -18,9 +25,7 @@ export const POST = apiHandler(async (req) => {
       .insert(groups)
       .values({ name, createdBy: userId })
       .returning();
-    await tx
-      .insert(groupMembers)
-      .values({ groupId: created.id, userId });
+    await tx.insert(groupMembers).values({ groupId: created.id, userId });
     return created;
   });
 
@@ -48,5 +53,57 @@ export const GET = apiHandler(async () => {
     .groupBy(groups.id)
     .orderBy(groups.createdAt);
 
-  return Response.json({ groups: rows });
+  if (rows.length === 0) {
+    return Response.json({ groups: [] });
+  }
+
+  // The caller's net position in each group. Fetched in two queries for all
+  // groups at once rather than per group, then run through the same pure
+  // balance function the group page uses, so a total can never disagree with
+  // the detail it summarises.
+  const groupIds = rows.map((g) => g.id);
+
+  const shareRows = await db
+    .select({
+      groupId: expenses.groupId,
+      paidBy: expenses.paidBy,
+      userId: expenseShares.userId,
+      owedCents: expenseShares.owedCents,
+    })
+    .from(expenseShares)
+    .innerJoin(expenses, eq(expenses.id, expenseShares.expenseId))
+    .where(inArray(expenses.groupId, groupIds));
+
+  const settlementRows = await db
+    .select({
+      groupId: settlements.groupId,
+      fromUser: settlements.fromUser,
+      toUser: settlements.toUser,
+      amountCents: settlements.amountCents,
+    })
+    .from(settlements)
+    .where(
+      and(
+        inArray(settlements.groupId, groupIds),
+        ne(settlements.status, "failed")
+      )
+    );
+
+  const netByGroup = new Map<string, number>();
+  for (const groupId of groupIds) {
+    const net = computeNetBalances(
+      shareRows
+        .filter((r) => r.groupId === groupId)
+        .map((r) => ({
+          paidBy: r.paidBy,
+          shares: [{ userId: r.userId, owedCents: r.owedCents }],
+        })),
+      settlementRows.filter((s) => s.groupId === groupId)
+    );
+    netByGroup.set(groupId, net.get(userId) ?? 0);
+  }
+
+  return Response.json({
+    groups: rows.map((g) => ({ ...g, netCents: netByGroup.get(g.id) ?? 0 })),
+  });
 });
