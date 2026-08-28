@@ -1,26 +1,146 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+/* ---------------------------------------------------------------------------
+   Design tokens — "Ledger"
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+   Neutrals are warm (paper, not concrete): a cold gray UI is the surest sign
+   nobody picked the colors. Deep pine carries the brand — the green of
+   ledgers and banknotes, money-adjacent without being literal — against clay
+   red rather than fire-engine red, and ochre for caution.
+
+   Money direction is never signalled by color alone; every figure is paired
+   with "owes" or "is owed" in text.
+--------------------------------------------------------------------------- */
+
+:root {
+  --bg: #faf9f6;
+  --surface: #ffffff;
+  --surface-subtle: #f3f1ec;
+  --text: #1c1a17;
+  --text-muted: #6e6862;
+  --text-faint: #9a938b;
+  --border: #e6e2da;
+  --border-strong: #d5cfc4;
+
+  --brand: #1b4d3e;
+  --brand-hover: #164034;
+  --brand-active: #102e26;
+  --brand-ring: #2e7d66;
+  --on-brand: #ffffff;
+  --brand-subtle: #eaf1ee;
+
+  --positive: #0b6b4e;
+  --positive-subtle: #e7f5ef;
+  --negative: #b4402f;
+  --negative-subtle: #fbeeeb;
+  --warning: #8f5f12;
+  --warning-subtle: #fbf3e4;
+
+  --shadow-sm: 0 1px 2px 0 rgb(28 26 23 / 0.05);
+  --shadow-md: 0 1px 3px 0 rgb(28 26 23 / 0.08), 0 1px 2px -1px rgb(28 26 23 / 0.06);
+  --shadow-lg: 0 12px 28px -8px rgb(28 26 23 / 0.14), 0 4px 10px -4px rgb(28 26 23 / 0.07);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    /* Warm charcoal, not blue-black — the paper metaphor survives the dark. */
+    --bg: #171613;
+    --surface: #201e1a;
+    --surface-subtle: #2a2723;
+    --text: #f5f2ec;
+    --text-muted: #a8a29a;
+    --text-faint: #7c766e;
+    --border: #302d28;
+    --border-strong: #45403a;
+
+    --brand: #4fa98b;
+    --brand-hover: #6bbfa2;
+    --brand-active: #86d3b8;
+    --brand-ring: #4fa98b;
+    --on-brand: #10231c;
+    --brand-subtle: #163027;
+
+    --positive: #4cc493;
+    --positive-subtle: #12291f;
+    --negative: #ef8a75;
+    --negative-subtle: #2e1a15;
+    --warning: #d9a441;
+    --warning-subtle: #2c2113;
+
+    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.4);
+    --shadow-md: 0 1px 3px 0 rgb(0 0 0 / 0.5), 0 1px 2px -1px rgb(0 0 0 / 0.4);
+    --shadow-lg: 0 12px 28px -8px rgb(0 0 0 / 0.6), 0 4px 10px -4px rgb(0 0 0 / 0.4);
   }
 }
 
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-subtle: var(--surface-subtle);
+  --color-text: var(--text);
+  --color-text-muted: var(--text-muted);
+  --color-text-faint: var(--text-faint);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-brand: var(--brand);
+  --color-brand-hover: var(--brand-hover);
+  --color-brand-subtle: var(--brand-subtle);
+  --color-on-brand: var(--on-brand);
+  --color-positive: var(--positive);
+  --color-positive-subtle: var(--positive-subtle);
+  --color-negative: var(--negative);
+  --color-negative-subtle: var(--negative-subtle);
+  --color-warning: var(--warning);
+  --color-warning-subtle: var(--warning-subtle);
+  --font-sans: var(--font-plex-sans), ui-sans-serif, system-ui, sans-serif;
+}
+
+* {
+  border-color: var(--border);
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: var(--font-sans), system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Money must never reflow as digits change, so figures are tabular
+   everywhere numbers are compared down a column. */
+.tnum {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* One focus treatment for the whole app, never removed — only replaced. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--brand-ring);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@keyframes fade-rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.animate-in {
+  animation: fade-rise 200ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
