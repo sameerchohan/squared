@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { cx } from "./ui";
 import { LogOutIcon, SpinnerIcon, SquaredMark } from "./icons";
+import { ThemeToggle } from "./theme-toggle";
 import { api } from "@/lib/client";
 
 /* The masthead spans the full viewport — the wordmark sits at the left edge
@@ -55,7 +56,8 @@ export function AppShell({
               <span className="text-[16px] font-semibold tracking-tight">Squared</span>
             </Link>
 
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 sm:gap-3">
+              <ThemeToggle />
               <div className="hidden items-center gap-2.5 sm:flex">
                 <span
                   aria-hidden="true"
