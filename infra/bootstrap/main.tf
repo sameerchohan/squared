@@ -12,6 +12,16 @@ terraform {
       version = "~> 5.0"
     }
   }
+
+  # Separate key from the application stack: this state must survive
+  # destroying that stack, since CI depends on the role it holds.
+  backend "s3" {
+    bucket       = "squared-tfstate-655503101368"
+    key          = "bootstrap/terraform.tfstate"
+    region       = "us-east-2"
+    encrypt      = true
+    use_lockfile = true
+  }
 }
 
 provider "aws" {

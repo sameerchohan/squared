@@ -145,6 +145,15 @@ Deployment lives in [`infra/`](infra/) — Terraform for Fargate behind an ALB, 
 
 ---
 
+## Further reading
+
+Two documents cover the parts a README shouldn't carry:
+
+- **[Decision record](docs/DECISIONS.md)** — why the project is built this way, including the options rejected: destination charges over direct charges, Express over Custom accounts, stable Stripe v1 over the v2 preview, greedy debt simplification and where it stops being optimal, and the NAT gateway as a cost/topology trade rather than a default.
+- **[Engineering log](docs/ENGINEERING-LOG.md)** — fourteen bugs, how each was diagnosed, and what it changed. Several were only findable by running against real Postgres, real AWS, and real Stripe; all of them would have passed a code review.
+
+---
+
 ## What I'd do differently at scale
 
 **Balances are recomputed from every expense on each read.** Fine for groups of a dozen people and a few hundred expenses, and it keeps the calculation obviously correct — there's no cached total to drift. At a scale where groups accumulate years of history, this becomes a materialized balance per member, updated transactionally as expenses and settlements land, with the full recomputation kept as a reconciliation job that verifies the cache rather than trusting it.
