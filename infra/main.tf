@@ -11,18 +11,19 @@ terraform {
     }
   }
 
-  # State holds the database endpoint and secret ARNs, so it belongs in a
+  # State holds the database endpoint and secret ARNs, so it lives in a
   # versioned, encrypted bucket rather than on a laptop. use_lockfile is S3
   # native locking, which replaces the old DynamoDB lock table.
   #
-  # Create the bucket first, then run `terraform init -migrate-state`.
-  # backend "s3" {
-  #   bucket       = "squared-tfstate-<your-account-id>"
-  #   key          = "prod/terraform.tfstate"
-  #   region       = "us-east-2"
-  #   encrypt      = true
-  #   use_lockfile = true
-  # }
+  # The bucket name embeds the account id to be globally unique; substitute
+  # your own when deploying from a different account.
+  backend "s3" {
+    bucket       = "squared-tfstate-655503101368"
+    key          = "prod/terraform.tfstate"
+    region       = "us-east-2"
+    encrypt      = true
+    use_lockfile = true
+  }
 }
 
 provider "aws" {

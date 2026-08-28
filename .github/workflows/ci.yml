@@ -144,10 +144,19 @@ jobs:
         with:
           terraform_version: 1.13.5
 
+      # Initializes the real S3 backend so the plan runs against actual
+      # state rather than an empty one.
+      #
+      #   -refresh=false  the CI role is explicitly denied secret decryption,
+      #                   and refreshing aws_secretsmanager_secret_version
+      #                   would require exactly that. Skipping refresh keeps
+      #                   the role read-only without weakening the deny.
+      #   -lock=false     a plan writes no state, and acquiring the S3 lock
+      #                   would need write access to the state bucket.
       - name: Plan
         run: |
-          terraform init -backend=false
-          terraform plan -input=false -no-color
+          terraform init -input=false
+          terraform plan -input=false -no-color -refresh=false -lock=false
         env:
           # terraform.tfvars is gitignored, so plan-only stand-ins are used.
           # They affect an alarm address and an image tag, not the topology
