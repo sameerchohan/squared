@@ -1,5 +1,5 @@
 terraform {
-  required_version = ">= 1.6"
+  required_version = ">= 1.10" # S3 native state locking (use_lockfile)
   required_providers {
     aws = {
       source  = "hashicorp/aws"
@@ -11,13 +11,15 @@ terraform {
     }
   }
 
-  # State holds database endpoints and secret ARNs, so it belongs in a
-  # versioned, encrypted bucket rather than on a laptop. Fill in and run
-  # `terraform init -migrate-state` before the first real deploy.
+  # State holds the database endpoint and secret ARNs, so it belongs in a
+  # versioned, encrypted bucket rather than on a laptop. use_lockfile is S3
+  # native locking, which replaces the old DynamoDB lock table.
+  #
+  # Create the bucket first, then run `terraform init -migrate-state`.
   # backend "s3" {
-  #   bucket       = "squared-tfstate"
+  #   bucket       = "squared-tfstate-<your-account-id>"
   #   key          = "prod/terraform.tfstate"
-  #   region       = "us-east-1"
+  #   region       = "us-east-2"
   #   encrypt      = true
   #   use_lockfile = true
   # }
