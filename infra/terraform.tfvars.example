@@ -1,0 +1,15 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored.
+region      = "us-east-2"
+app_domain  = "squared.example.com"
+alert_email = "you@example.com"
+
+monthly_budget_usd = 40
+
+# Route 53 hosted zone for app_domain. Leave empty when DNS lives elsewhere
+# (Cloudflare, Vercel, Namecheap) and add the validation records by hand —
+# see README.md.
+route53_zone_id = ""
+
+# Tasks in private subnets behind a NAT gateway (~$32/month extra).
+# false runs them in public subnets, reachable only from the load balancer.
+use_nat_gateway = false
