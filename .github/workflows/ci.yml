@@ -90,3 +90,26 @@ jobs:
 
       - name: Build the production image
         run: docker build -t squared:ci .
+
+  terraform:
+    name: terraform
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.13.5
+
+      - name: Check formatting
+        run: terraform fmt -check -recursive
+
+      # -backend=false skips remote state, so this needs no AWS credentials
+      # and runs on every PR at no cost.
+      - name: Validate
+        run: |
+          terraform init -backend=false
+          terraform validate
