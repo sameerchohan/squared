@@ -41,6 +41,26 @@ variable "github_repo" {
   default     = "sameerchohan/squared"
 }
 
+# GitHub is migrating OIDC subject claims to an immutable form that embeds
+# numeric ids — repo:owner@<ownerId>/name@<repoId>:... — so that renaming a
+# repository cannot silently break a trust policy, or worse, let whoever
+# claims the old name inherit it. Repositories issue one form or the other,
+# and nearly every guide still documents only the legacy one.
+#
+# Matching on the ids with the names wildcarded is the durable choice: the
+# ids never change, so a rename keeps working.
+variable "github_owner_id" {
+  description = "Numeric GitHub account id of the repository owner."
+  type        = string
+  default     = "147352814"
+}
+
+variable "github_repo_id" {
+  description = "Numeric GitHub id of the repository."
+  type        = string
+  default     = "1347870948"
+}
+
 # ---------------------------------------------------------------------------
 # GitHub Actions federation
 #
@@ -84,6 +104,10 @@ data "aws_iam_policy_document" "ci_assume" {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
       values = [
+        # Immutable form (what this repository currently issues).
+        "repo:*@${var.github_owner_id}/*@${var.github_repo_id}:pull_request",
+        "repo:*@${var.github_owner_id}/*@${var.github_repo_id}:ref:refs/heads/main",
+        # Legacy form, kept so the role keeps working either way.
         "repo:${var.github_repo}:pull_request",
         "repo:${var.github_repo}:ref:refs/heads/main",
       ]
