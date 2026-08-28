@@ -48,9 +48,12 @@ resource "aws_db_instance" "main" {
   copy_tags_to_snapshot   = true
 
   auto_minor_version_upgrade = true
-  deletion_protection        = true
-  skip_final_snapshot        = false
-  final_snapshot_identifier  = "${var.project}-final-snapshot"
+  deletion_protection        = var.enable_deletion_protection
+
+  # A final snapshot is the right default for real data, but it outlives the
+  # instance and keeps billing for storage, so a disposable demo skips it.
+  skip_final_snapshot       = !var.enable_deletion_protection
+  final_snapshot_identifier = var.enable_deletion_protection ? "${var.project}-final-snapshot" : null
 
   # Performance Insights is unavailable on burstable micro/small classes, so
   # it is opt-in and stays off with the default instance class.

@@ -10,7 +10,7 @@ resource "random_password" "db" {
 resource "aws_secretsmanager_secret" "db_password" {
   name                    = "${var.project}/db-password"
   description             = "Master password for the Squared RDS instance"
-  recovery_window_in_days = 7
+  recovery_window_in_days = var.enable_deletion_protection ? 7 : 0
 }
 
 resource "aws_secretsmanager_secret_version" "db_password" {
@@ -23,7 +23,7 @@ resource "aws_secretsmanager_secret_version" "db_password" {
 resource "aws_secretsmanager_secret" "database_url" {
   name                    = "${var.project}/database-url"
   description             = "Postgres connection string"
-  recovery_window_in_days = 7
+  recovery_window_in_days = var.enable_deletion_protection ? 7 : 0
 }
 
 resource "aws_secretsmanager_secret_version" "database_url" {
@@ -46,7 +46,7 @@ resource "random_password" "jwt" {
 resource "aws_secretsmanager_secret" "jwt_secret" {
   name                    = "${var.project}/jwt-secret"
   description             = "Signing key for session JWTs"
-  recovery_window_in_days = 7
+  recovery_window_in_days = var.enable_deletion_protection ? 7 : 0
 }
 
 resource "aws_secretsmanager_secret_version" "jwt_secret" {
@@ -64,11 +64,11 @@ resource "aws_secretsmanager_secret_version" "jwt_secret" {
 resource "aws_secretsmanager_secret" "stripe_secret_key" {
   name                    = "${var.project}/stripe-secret-key"
   description             = "Stripe secret API key — set out of band"
-  recovery_window_in_days = 7
+  recovery_window_in_days = var.enable_deletion_protection ? 7 : 0
 }
 
 resource "aws_secretsmanager_secret" "stripe_webhook_secret" {
   name                    = "${var.project}/stripe-webhook-secret"
   description             = "Stripe webhook signing secret — set out of band"
-  recovery_window_in_days = 7
+  recovery_window_in_days = var.enable_deletion_protection ? 7 : 0
 }

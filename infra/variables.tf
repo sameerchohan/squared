@@ -63,6 +63,22 @@ variable "use_nat_gateway" {
   default     = false
 }
 
+# ---------------------------------------------------------------------------
+# Lifecycle
+#
+# Production wants deletion protection, a final snapshot, and a recovery
+# window on deleted secrets. A demo that is stood up, screenshotted, and torn
+# down the same day wants none of those, because each one blocks or lingers
+# after `terraform destroy` and quietly keeps costing money.
+#
+# Defaults are tuned for the ephemeral case. Set this true for anything real.
+# ---------------------------------------------------------------------------
+variable "enable_deletion_protection" {
+  description = "Guard against accidental deletion. True for production, false for a disposable demo."
+  type        = bool
+  default     = false
+}
+
 variable "desired_count" {
   description = "Number of Fargate tasks. One is enough for a demo; deploys stay zero-downtime because ECS starts the replacement before draining."
   type        = number
