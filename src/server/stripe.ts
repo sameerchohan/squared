@@ -16,12 +16,26 @@ export function getStripe(): Stripe {
   return client;
 }
 
-export function getWebhookSecret(): string {
-  const secret = process.env.STRIPE_WEBHOOK_SECRET;
-  if (!secret) {
+/**
+ * Stripe delivers events about connected accounts (account.updated) through a
+ * Connect endpoint, and events about the platform's own charges
+ * (checkout.session.*) through a regular one. Two endpoints means two signing
+ * secrets, so this accepts a comma-separated list and the verifier tries each.
+ *
+ * The local `stripe listen` forwarder issues a single secret covering both,
+ * which is why one value is also valid.
+ */
+export function getWebhookSecrets(): string[] {
+  const raw = process.env.STRIPE_WEBHOOK_SECRET;
+  const secrets = (raw ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  if (secrets.length === 0) {
     throw new ApiError(503, "Stripe webhooks are not configured");
   }
-  return secret;
+  return secrets;
 }
 
 export function appUrl(): string {
