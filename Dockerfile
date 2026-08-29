@@ -13,7 +13,8 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 # No database or secrets are needed to build: src/db/index.ts constructs its
 # pool lazily, so nothing connects at import time.
-ENV NEXT_TELEMETRY_DISABLED=1
+ENV NEXT_TELEMETRY_DISABLED=1 \
+    DOCKER_BUILD=1
 RUN npm run build
 
 # ---- runner: only the traced server output and migration tooling ----
