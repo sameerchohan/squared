@@ -10,7 +10,11 @@ const BCRYPT_ROUNDS = 12;
 function jwtSecret(): Uint8Array {
   const secret = process.env.JWT_SECRET;
   if (!secret) {
-    throw new Error("JWT_SECRET is not set");
+    // A 503 rather than a generic 500: the caller did nothing wrong and can
+    // do nothing about it, and "Internal server error" on a *correct*
+    // password sends whoever is debugging it looking at the password check.
+    console.error("JWT_SECRET is not set — sessions cannot be issued");
+    throw new ApiError(503, "Sessions aren't configured on this server yet.");
   }
   return new TextEncoder().encode(secret);
 }
