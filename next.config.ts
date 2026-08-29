@@ -17,9 +17,11 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
-  // Standalone output keeps the Fargate image small: only the server and the
-  // dependencies it actually traced.
-  output: "standalone",
+  // Standalone output exists for the container image, where it keeps only the
+  // server and its traced dependencies. Platforms that build the app
+  // themselves supply their own packaging, so it is opt-in via the Dockerfile
+  // rather than always on.
+  output: process.env.DOCKER_BUILD ? "standalone" : undefined,
   poweredByHeader: false,
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
