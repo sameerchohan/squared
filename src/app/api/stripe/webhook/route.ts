@@ -1,6 +1,6 @@
 import type Stripe from "stripe";
 import { apiHandler } from "@/server/errors";
-import { getStripe, getWebhookSecret } from "@/server/stripe";
+import { getStripe, getWebhookSecrets } from "@/server/stripe";
 import { handleStripeEvent } from "@/server/webhooks";
 
 // No session auth here — authenticity comes from the Stripe signature over
@@ -12,14 +12,22 @@ export const POST = apiHandler(async (req) => {
   }
 
   const rawBody = await req.text();
-  let event: Stripe.Event;
-  try {
-    event = await getStripe().webhooks.constructEventAsync(
-      rawBody,
-      signature,
-      getWebhookSecret()
-    );
-  } catch {
+  const stripe = getStripe();
+
+  // Verified against each configured secret; the event is accepted only if
+  // one of them produces a valid signature. Failing every secret is
+  // indistinguishable from a forgery, and is answered the same way.
+  let event: Stripe.Event | null = null;
+  for (const secret of getWebhookSecrets()) {
+    try {
+      event = await stripe.webhooks.constructEventAsync(rawBody, signature, secret);
+      break;
+    } catch {
+      // Try the next secret.
+    }
+  }
+
+  if (!event) {
     return Response.json({ error: "Invalid signature" }, { status: 400 });
   }
 
