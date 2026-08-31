@@ -34,12 +34,19 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 
-# Migration tooling: drizzle-orm has no runtime dependencies of its own, and
-# pg is already traced into the standalone bundle, so this is all the
-# migration task needs.
+# Migration and seed tooling: drizzle-orm has no runtime dependencies of its
+# own, and pg is already traced into the standalone bundle. bcryptjs is not —
+# Next bundles it into the compiled server output, so nothing is left in
+# node_modules for a standalone script to import. It is dependency-free and
+# 140 KB, so copying it costs nothing and keeps the seed task runnable.
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules/drizzle-orm ./node_modules/drizzle-orm
+COPY --from=builder --chown=nextjs:nodejs /app/node_modules/bcryptjs ./node_modules/bcryptjs
 COPY --chown=nextjs:nodejs drizzle ./drizzle
 COPY --chown=nextjs:nodejs scripts/migrate.mjs ./scripts/migrate.mjs
+
+# Seeding runs as a one-off task against a fresh database, using the same
+# task definition as migrations with an overridden command.
+COPY --chown=nextjs:nodejs scripts/seed.mjs ./scripts/seed.mjs
 
 USER nextjs
 EXPOSE 3000
