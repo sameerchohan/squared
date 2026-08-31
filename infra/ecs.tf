@@ -68,6 +68,10 @@ locals {
     { name = "NODE_ENV", value = "production" },
     { name = "APP_URL", value = "https://${var.app_domain}" },
     { name = "PORT", value = "3000" },
+    # RDS chains to a private Amazon root absent from Node's bundled CA store.
+    # This adds those roots to the default set; it does not replace them, and
+    # certificate verification stays on.
+    { name = "NODE_EXTRA_CA_CERTS", value = "/app/certs/rds-global-bundle.pem" },
   ]
 }
 
@@ -132,6 +136,10 @@ resource "aws_ecs_task_definition" "migrate" {
       image     = "${aws_ecr_repository.app.repository_url}:${var.image_tag}"
       essential = true
       command   = ["node", "scripts/migrate.mjs"]
+
+      environment = [
+        { name = "NODE_EXTRA_CA_CERTS", value = "/app/certs/rds-global-bundle.pem" },
+      ]
 
       secrets = [
         {

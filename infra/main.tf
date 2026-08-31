@@ -230,9 +230,14 @@ resource "aws_vpc_security_group_egress_rule" "app_to_db" {
   ip_protocol                  = "tcp"
 }
 
+# EC2 rejects any non-ASCII character in a security group description with an
+# opaque InvalidParameterValue, and `terraform plan` cannot catch it because
+# the value is valid HCL and the API is never consulted until apply. Keep the
+# punctuation here plain, even though the rest of this repository uses em
+# dashes freely.
 resource "aws_security_group" "db" {
   name        = "${var.project}-db"
-  description = "RDS Postgres — reachable only from application tasks"
+  description = "RDS Postgres, reachable only from application tasks"
   vpc_id      = aws_vpc.main.id
 
   tags = { Name = "${var.project}-db" }
