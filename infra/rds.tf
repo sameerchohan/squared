@@ -11,9 +11,15 @@ resource "aws_db_parameter_group" "main" {
   name_prefix = "${var.project}-pg16-"
   family      = "postgres16"
 
+  # rds.force_ssl is a static parameter: RDS only picks it up on reboot and
+  # records it as apply_method "pending-reboot". Declaring it without an
+  # apply_method lets the provider default to "immediate", which never matches
+  # what AWS reports back, so every plan shows the same phantom change. Saying
+  # it explicitly is what makes the plan converge.
   parameter {
-    name  = "rds.force_ssl"
-    value = "1"
+    name         = "rds.force_ssl"
+    value        = "1"
+    apply_method = "pending-reboot"
   }
 
   lifecycle {
