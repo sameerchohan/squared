@@ -42,7 +42,7 @@ resource "aws_db_instance" "main" {
   publicly_accessible    = false
 
   multi_az                = false # single-AZ to keep costs down; see README
-  backup_retention_period = 7
+  backup_retention_period = var.backup_retention_days
   backup_window           = "07:00-08:00"
   maintenance_window      = "Mon:08:30-Mon:09:30"
   copy_tags_to_snapshot   = true

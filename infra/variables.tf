@@ -103,6 +103,25 @@ variable "db_instance_class" {
   default     = "db.t4g.micro"
 }
 
+# ---------------------------------------------------------------------------
+# Automated backups
+#
+# Seven days is the right retention for a database holding payment records,
+# and it is what this stack asks for by default. AWS accounts on the Free
+# plan cannot have it: CreateDBInstance rejects the request outright with
+# FreeTierRestrictionError, and no amount of planning reveals this, because
+# the entitlement is only checked when the instance is actually created.
+#
+# It is a variable rather than a lowered default so the production value
+# stays the default and a restricted account can opt down for a throwaway
+# deployment.
+# ---------------------------------------------------------------------------
+variable "backup_retention_days" {
+  description = "Days of automated RDS backups. 7 for production; Free-plan accounts must lower it."
+  type        = number
+  default     = 7
+}
+
 variable "enable_performance_insights" {
   description = "Requires db.t4g.medium or larger — AWS rejects it on micro/small."
   type        = bool
