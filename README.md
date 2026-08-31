@@ -2,6 +2,10 @@
 
 Squared splits group expenses like Splitwise, but settling up moves real money. Members log shared expenses with equal, exact-amount, or percentage splits; the app nets everyone's position within a group and reduces the debts to the fewest transfers that clear them; then a member pays what they owe through Stripe Connect, and the funds land in the recipient's connected account. There is no "mark as paid" checkbox — a settlement is a payment or it is nothing.
 
+**[Live demo →](https://squared.sameerchohan.com)**  ·  sign in as `priya@squared.demo` / `demo1234`
+
+Seeded with three groups so the balance engine has something real to solve: a five-person trip, a shared apartment with rent split by percentage, and a small recurring group. Payments run in Stripe **test mode** — settling up opens a real Stripe Checkout, and card `4242 4242 4242 4242` completes it. No real money moves.
+
 **Stack:** Next.js (App Router) · TypeScript · Tailwind · PostgreSQL + Drizzle · Stripe Connect · Vitest · Docker · Terraform (ECS Fargate, RDS, Secrets Manager)
 
 ---
@@ -141,7 +145,15 @@ stripe listen --forward-to localhost:3000/api/stripe/webhook
 
 Use card `4242 4242 4242 4242` at checkout. Both parties need to complete Express onboarding before a settlement between them is allowed.
 
-Deployment lives in [`infra/`](infra/) — Terraform for Fargate behind an ALB, RDS in private subnets, secrets injected from Secrets Manager at task start, and a budget alarm so a demo deployment can't quietly run up a bill. It validates but has not been applied; see [`infra/README.md`](infra/README.md) for the deploy runbook, the cost breakdown, and the reasoning behind each trade.
+## Deploying
+
+There are two deployment targets, for two different reasons.
+
+**The live demo runs on Vercel** with Neon Postgres, at no cost. That is deliberate: this architecture on AWS costs about **$42/month idle**, and an expense-splitting demo does not justify a permanent meter. A recruiter clicking the link cannot tell what is underneath it, so the money buys nothing.
+
+**The production-grade path is Terraform in [`infra/`](infra/)** — Fargate behind an ALB, RDS private and encrypted with TLS enforced, secrets injected from Secrets Manager at task start, security groups referencing each other rather than CIDR ranges, a deployment circuit breaker with automatic rollback, and a budget alarm. It is validated on every pull request: CI runs `terraform plan` **against the real AWS account** through GitHub OIDC, with no long-lived credentials stored anywhere.
+
+That plan-in-CI is the ongoing proof the infrastructure code is sound — stronger than a screenshot, because it cannot go stale. [`infra/README.md`](infra/README.md) has the runbook, the cost breakdown, and the reasoning behind each trade, including why the NAT gateway is a variable rather than a default.
 
 ---
 
@@ -167,6 +179,8 @@ Two documents cover the parts a README shouldn't carry:
 **The idempotency ledger grows without bound.** Every Stripe event id is kept forever. Since Stripe stops retrying after a few days, rows older than that window serve no purpose and should be aged out — partitioned by month and dropped, rather than accumulating indefinitely in a table on the hot path of every webhook.
 
 **Tasks run in public subnets, and RDS is single-AZ.** Both are cost decisions, and the first is the more interesting one: a NAT gateway costs ~$32/month and buys network topology rather than access control, since the tasks' security group already admits nothing but the load balancer. Flipping `use_nat_gateway` in the Terraform moves them into private subnets — the topology to run with real money, where a compromised task can't be addressed directly even if a security group is later misconfigured, and outbound traffic leaves from a stable IP an upstream provider can allowlist. Multi-AZ RDS is the other change real users would justify. Both paths are in the code because the trade-off, not the default, is the point.
+
+**The demo and the production path are different deployments.** The live site runs on Vercel with a serverless Postgres; the Terraform describes a containerised deployment on Fargate. That split is honest about cost, but it does mean the two are not identical environments — connection pooling in particular behaves differently, which is why the app uses a pooled connection string and transaction-scoped advisory locks that survive a transaction pooler. A single target would be simpler.
 
 **Everything is USD.** Currency is assumed rather than stored. Supporting more means a currency column on groups, per-currency balances, and a decision about what "settling up" means across currencies — which is a product question before it's a schema question.
 
