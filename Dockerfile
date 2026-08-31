@@ -41,6 +41,12 @@ COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 # 140 KB, so copying it costs nothing and keeps the seed task runnable.
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules/drizzle-orm ./node_modules/drizzle-orm
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules/bcryptjs ./node_modules/bcryptjs
+# Amazon RDS presents a certificate chaining to a private Amazon root that is
+# NOT in Node's bundled Mozilla CA store, so `rejectUnauthorized: true` fails
+# with SELF_SIGNED_CERT_IN_CHAIN against a real RDS instance. The task
+# definitions point NODE_EXTRA_CA_CERTS at this bundle, which adds these roots
+# to the default set rather than replacing or weakening it.
+COPY --chown=nextjs:nodejs certs/rds-global-bundle.pem ./certs/rds-global-bundle.pem
 COPY --chown=nextjs:nodejs drizzle ./drizzle
 COPY --chown=nextjs:nodejs scripts/migrate.mjs ./scripts/migrate.mjs
 

@@ -13,7 +13,9 @@ if (!DATABASE_URL) {
 
 const pool = new pg.Pool({
   connectionString: DATABASE_URL,
-  // RDS requires TLS; the bundled CA set validates it. Set
+  // RDS requires TLS. Its certificate chains to a private Amazon root that is
+  // not in Node's bundled CA store, so NODE_EXTRA_CA_CERTS points at the RDS
+  // bundle shipped in the image; verification stays on. Set
   // PGSSLMODE=disable for local docker-compose.
   ssl:
     process.env.PGSSLMODE === "disable" ? false : { rejectUnauthorized: true },
