@@ -153,7 +153,13 @@ There are two deployment targets, for two different reasons.
 
 **The production-grade path is Terraform in [`infra/`](infra/)** — Fargate behind an ALB, RDS private and encrypted with TLS enforced, secrets injected from Secrets Manager at task start, security groups referencing each other rather than CIDR ranges, a deployment circuit breaker with automatic rollback, and a budget alarm. It is validated on every pull request: CI runs `terraform plan` **against the real AWS account** through GitHub OIDC, with no long-lived credentials stored anywhere.
 
-That plan-in-CI is the ongoing proof the infrastructure code is sound — stronger than a screenshot, because it cannot go stale. [`infra/README.md`](infra/README.md) has the runbook, the cost breakdown, and the reasoning behind each trade, including why the NAT gateway is a variable rather than a default.
+That plan-in-CI is the ongoing proof the infrastructure code is sound — stronger than a screenshot, because it cannot go stale.
+
+**It has also been applied.** On 31 August 2026 the stack was deployed to the real account: VPC, ALB, Fargate, RDS, Secrets Manager. It served the application over HTTPS on an ACM certificate, ran its migrations as a one-off task, seeded a database it could not reach from a laptop, processed a Stripe webhook, and was destroyed the same afternoon for about **$0.09**. `terraform plan` against the running stack reported *No changes*.
+
+That exercise found six failures a clean plan had never surfaced — a certificate authority policy inherited through a CNAME, a non-ASCII character in a security group description, an account entitlement on backup retention, a missing root CA for RDS, a parameter that could never converge, and a teardown path that would have crashed. They are entries 16 to 21 in the [engineering log](docs/ENGINEERING-LOG.md). A plan validates a configuration against an API; it cannot validate string encoding, billing entitlements, or trust chains, because none of those are consulted until something is created.
+
+[`infra/README.md`](infra/README.md) has the runbook, the cost breakdown, and the reasoning behind each trade, including why the NAT gateway is a variable rather than a default.
 
 ---
 
@@ -162,7 +168,7 @@ That plan-in-CI is the ongoing proof the infrastructure code is sound — strong
 Two documents cover the parts a README shouldn't carry:
 
 - **[Decision record](docs/DECISIONS.md)** — why the project is built this way, including the options rejected: destination charges over direct charges, Express over Custom accounts, stable Stripe v1 over the v2 preview, greedy debt simplification and where it stops being optimal, and the NAT gateway as a cost/topology trade rather than a default.
-- **[Engineering log](docs/ENGINEERING-LOG.md)** — fourteen bugs, how each was diagnosed, and what it changed. Several were only findable by running against real Postgres, real AWS, and real Stripe; all of them would have passed a code review.
+- **[Engineering log](docs/ENGINEERING-LOG.md)** — twenty-one bugs, how each was diagnosed, and what it changed. Several were only findable by running against real Postgres, real AWS, and real Stripe; all of them would have passed a code review. The last seven come from the day this infrastructure was first actually applied.
 
 ---
 
@@ -181,6 +187,8 @@ Two documents cover the parts a README shouldn't carry:
 **Tasks run in public subnets, and RDS is single-AZ.** Both are cost decisions, and the first is the more interesting one: a NAT gateway costs ~$32/month and buys network topology rather than access control, since the tasks' security group already admits nothing but the load balancer. Flipping `use_nat_gateway` in the Terraform moves them into private subnets — the topology to run with real money, where a compromised task can't be addressed directly even if a security group is later misconfigured, and outbound traffic leaves from a stable IP an upstream provider can allowlist. Multi-AZ RDS is the other change real users would justify. Both paths are in the code because the trade-off, not the default, is the point.
 
 **The demo and the production path are different deployments.** The live site runs on Vercel with a serverless Postgres; the Terraform describes a containerised deployment on Fargate. That split is honest about cost, but it does mean the two are not identical environments — connection pooling in particular behaves differently, which is why the app uses a pooled connection string and transaction-scoped advisory locks that survive a transaction pooler. A single target would be simpler.
+
+**An abandoned checkout hides a debt for up to 24 hours.** Settlements are inserted as `pending` before Stripe is called — that ordering is what makes the concurrent-settlement guard work — and pending settlements count against the balance. If someone opens Checkout and walks away, the debt disappears from the group until Stripe fires `checkout.session.expired`, which by default is a day later. A short `expires_at` on the session would shrink the window; sweeping stale pending settlements on read would close it.
 
 **Everything is USD.** Currency is assumed rather than stored. Supporting more means a currency column on groups, per-currency balances, and a decision about what "settling up" means across currencies — which is a product question before it's a schema question.
 

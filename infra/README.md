@@ -2,7 +2,11 @@
 
 Terraform for running Squared on AWS: Fargate behind an ALB, Postgres on RDS, secrets in Secrets Manager.
 
-> **Planned against a real account, not yet applied.** `fmt -check`, `validate`, and a full `terraform plan` all pass — the plan resolves 55 resources with no errors against live AWS APIs, which confirms credentials, parameter validity, and quota headroom. Nothing has been created yet.
+> **Applied, verified, and destroyed on 31 August 2026.** This stack was deployed to a real AWS account, served the application over HTTPS at a domain with an ACM certificate, ran migrations, processed a Stripe webhook, and was then torn down. Total cost: about **$0.09**. The permanent demo stays on Vercel, for the reasons in the main README.
+>
+> Every pull request still runs `fmt -check`, `validate`, and a full `terraform plan` against the live account. That is real evidence — it confirms credentials, parameter validity, and quota headroom — and applying it drew the boundary of what it can confirm. Five clean plans preceded an apply that failed six times in twenty minutes, because a plan cannot evaluate string encoding rules, account entitlements, or certificate trust chains: none of them are consulted until a create call is made. All six are written up in the [engineering log](../docs/ENGINEERING-LOG.md), entries 16 to 21.
+>
+> `terraform plan` against the deployed stack reported **No changes**, which is the claim worth making. Convergence is stronger evidence than a creation count.
 
 ## Shape
 
@@ -123,6 +127,16 @@ Two records are needed, both added under **DNS → Records**:
 
 The first comes from `terraform output acm_validation_records`; Cloudflare can't proxy underscore-prefixed records, so it stays DNS-only on its own. The second is the one to be careful with.
 
+**Pick a name that does not already point at another platform.** ACM will refuse to issue for a hostname whose CAA policy excludes Amazon, and **CAA lookups follow CNAMEs** — so a name currently aliased to Vercel inherits Vercel's list of permitted authorities, which does not include Amazon. The apply fails with `FailureReason: CAA_ERROR` even though the DNS validation record is correct and ACM reports it as `SUCCESS`. There is no way to override it at that name: a CNAME cannot carry its own CAA records.
+
+A sibling hostname avoids the problem entirely and leaves the existing site untouched. This deployment used `aws-squared`, whose CAA path is unrestricted to the root. Check before applying:
+
+```bash
+dig +short <the-name-you-want> CAA   # anything here that omits amazon.com will block ACM
+```
+
+Note that a *child* of the aliased name is no escape — `aws.squared.example.com` climbs through `squared.example.com` and inherits the same policy. Full write-up in the [engineering log](../docs/ENGINEERING-LOG.md), entry 16.
+
 **Set it to "DNS only" (grey cloud).** If you turn the orange cloud on, Cloudflare terminates TLS itself and reconnects to the ALB, which is fine only if the zone's **SSL/TLS mode is "Full (strict)"**. On the default **"Flexible"** mode, Cloudflare speaks plain HTTP to the ALB, the ALB's listener answers with its 301 to HTTPS, Cloudflare follows it back to itself, and the site dies in an **infinite redirect loop**. Grey cloud avoids the whole question. If you later want Cloudflare in front for DDoS protection, switch the zone to Full (strict) first, then enable the proxy.
 
 One consequence of grey cloud: the ALB's hostname is publicly visible, which is normal and not a security problem — inbound is still only 80 and 443, and the tasks behind it accept traffic solely from the ALB's security group.
@@ -173,7 +187,22 @@ That removes everything billable in one step — no final snapshot left behind, 
 
 Set `enable_deletion_protection = true` for anything real. It turns on deletion protection for the ALB and the database, takes a final snapshot on destroy, and gives deleted secrets a recovery window — at which point `terraform destroy` will refuse until the flags are deliberately flipped back. That refusal is the point: a database holding payment records should not be one command away from gone.
 
-The ECR repository and its images survive a destroy independently, as does the budget alarm. Delete those by hand if the account is being retired.
+**The ECR repository and the budget alarm do not survive a destroy on their own.** Both live in this stack's state with nothing protecting them, so `terraform destroy` deletes them — and it will *fail partway through* while doing it, because `aws_ecr_repository` has no `force_delete` and the repository holds images:
+
+```
+RepositoryNotEmptyException
+```
+
+That aborts the teardown with the expensive resources still running. Until these move to their own state file, take them out of this one first:
+
+```bash
+terraform state rm aws_ecr_repository.app aws_ecr_lifecycle_policy.app aws_budgets_budget.monthly
+terraform destroy
+```
+
+The budget in particular is worth keeping: it costs nothing and keeps watching an account nobody is looking at any more.
+
+Resources whose lifecycle differs from the application's belong in a separate state, the way `bootstrap/` already holds the OIDC provider and CI role. That is the actual fix and it has not been made yet.
 
 ### Cost of an ephemeral deployment
 
