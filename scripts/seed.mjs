@@ -4,6 +4,13 @@
 //
 //   node scripts/seed.mjs            add to whatever is already there
 //   node scripts/seed.mjs --reset    wipe app data first
+//
+// --reset carries Stripe Connect state across the wipe, keyed by email. A
+// settlement can only be sent to a recipient whose account is active, and
+// redoing Stripe's hosted onboarding by hand for five people is slow even
+// with test values, so losing it on every reseed would leave the public demo
+// with a Pay button nobody can press. Onboard the demo accounts once and
+// every later reset comes back with a working payment flow.
 import { drizzle } from "drizzle-orm/node-postgres";
 import { sql } from "drizzle-orm";
 import pg from "pg";
@@ -23,6 +30,9 @@ const db = drizzle(pool);
 
 const PASSWORD = "demo1234";
 
+// stripeAccountId is optional and only needed to seed a fresh database with
+// accounts that were onboarded elsewhere. Normally it stays absent: onboard
+// through the app once and --reset carries the ids forward on its own.
 const PEOPLE = [
   { key: "maya", name: "Maya Okonkwo", email: "maya@squared.demo" },
   { key: "daniel", name: "Daniel Reyes", email: "daniel@squared.demo" },
@@ -110,8 +120,20 @@ const GROUPS = [
   },
 ];
 
+// Read the Connect columns before the delete removes them. Only rows with an
+// account are worth carrying; the rest are already at the default.
+async function captureStripeState() {
+  const { rows } = await db.execute(sql`
+    SELECT email, stripe_account_id, stripe_onboarding_status
+    FROM users
+    WHERE stripe_account_id IS NOT NULL
+  `);
+  return new Map(rows.map((r) => [r.email, r]));
+}
+
 async function main() {
   const reset = process.argv.includes("--reset");
+  const carried = reset ? await captureStripeState() : new Map();
   if (reset) {
     // Order matters: children before parents, and settlements before groups
     // since that foreign key deliberately has no cascade.
@@ -123,15 +145,31 @@ async function main() {
     await db.execute(sql`DELETE FROM groups`);
     await db.execute(sql`DELETE FROM users`);
     console.log("cleared existing data");
+    if (carried.size > 0) {
+      console.log(`carrying ${carried.size} connected account(s) across the reset`);
+    }
   }
 
   const passwordHash = await hash(PASSWORD, 10);
   const ids = {};
   for (const person of PEOPLE) {
+    const kept = carried.get(person.email);
+    const accountId = person.stripeAccountId ?? kept?.stripe_account_id ?? null;
+    // A status without an account would fail the app's own state machine, so
+    // the two always move together.
+    const status = accountId
+      ? (kept?.stripe_onboarding_status ?? person.stripeOnboardingStatus ?? "active")
+      : "not_started";
     const rows = await db.execute(sql`
-      INSERT INTO users (email, password_hash, name, stripe_onboarding_status)
-      VALUES (${person.email}, ${passwordHash}, ${person.name}, 'not_started')
-      ON CONFLICT (email) DO UPDATE SET name = EXCLUDED.name
+      INSERT INTO users (email, password_hash, name, stripe_account_id, stripe_onboarding_status)
+      VALUES (${person.email}, ${passwordHash}, ${person.name}, ${accountId}, ${status})
+      ON CONFLICT (email) DO UPDATE SET
+        name = EXCLUDED.name,
+        stripe_account_id = COALESCE(users.stripe_account_id, EXCLUDED.stripe_account_id),
+        stripe_onboarding_status = CASE
+          WHEN users.stripe_account_id IS NOT NULL THEN users.stripe_onboarding_status
+          ELSE EXCLUDED.stripe_onboarding_status
+        END
       RETURNING id
     `);
     ids[person.key] = rows.rows[0].id;
@@ -195,6 +233,22 @@ async function main() {
 
   console.log(`\nSign in as any of these — password: ${PASSWORD}`);
   for (const p of PEOPLE) console.log(`  ${p.email}`);
+
+  const { rows: receivers } = await db.execute(sql`
+    SELECT name FROM users WHERE stripe_onboarding_status = 'active' ORDER BY name
+  `);
+  if (receivers.length === 0) {
+    console.log(
+      "\nNo demo account can receive a settlement yet, so no Pay button will\n" +
+        "appear. Sign in and use Set up payments on at least one account; a\n" +
+        "later --reset will keep it."
+    );
+  } else {
+    console.log(
+      `\n${receivers.length}/${PEOPLE.length} can receive settlements: ` +
+        receivers.map((r) => r.name).join(", ")
+    );
+  }
 }
 
 main()
