@@ -44,3 +44,4 @@ crash.log
 # Vercel CLI link metadata and pulled environment
 .vercel
 .env.trip
+.env*
