@@ -58,14 +58,15 @@ export function AppShell({
 
             <div className="flex items-center gap-2 sm:gap-3">
               <ThemeToggle />
-              <div className="hidden items-center gap-2.5 sm:flex">
+              <div className="flex items-center gap-2.5">
                 <span
+                  title={`${user.name} (${user.email})`}
                   aria-hidden="true"
-                  className="grid h-8 w-8 place-items-center rounded-full bg-white/12 text-[12px] font-semibold ring-1 ring-white/20"
+                  className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-white/12 text-[12px] font-semibold ring-1 ring-white/20"
                 >
                   {initials}
                 </span>
-                <span className="leading-tight">
+                <span className="hidden leading-tight sm:block">
                   <span className="block text-[13px] font-medium">{user.name}</span>
                   <span className="block text-[12px] text-[var(--on-masthead-muted)]">
                     {user.email}
@@ -102,7 +103,7 @@ export function AppShell({
 
       <main className="mx-auto w-full max-w-6xl flex-1 px-5 py-8 sm:px-8">{children}</main>
 
-      <footer className="border-t border-[var(--border)] bg-[var(--surface)]">
+      <footer className="border-t border-[var(--border)] bg-[var(--surface)] pb-[env(safe-area-inset-bottom)]">
         <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center justify-between gap-2 px-5 py-5 sm:px-8">
           <p className="text-[12px] text-[var(--text-faint)]">
             Settlements are processed by Stripe. Squared never stores card or bank details.

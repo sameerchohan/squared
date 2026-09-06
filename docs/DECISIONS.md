@@ -39,6 +39,13 @@ Staying on stable v1 (via the Accounts v1 support setting) because preview APIs 
 ### The platform absorbs Stripe's fee
 No `application_fee_amount` is set, so the recipient receives the full amount and the platform pays ~2.9% + 30¢. Deliberate for a portfolio project with no real settlements. For anything real, a payer-side surcharge is the option that preserves the app's core invariant — *you're owed $50, you get $50* — where `on_behalf_of` would quietly break it.
 
+### A payment made outside the app is recorded, not simulated
+Settling only through Stripe is correct for a product that moves money, and wrong for the case where the money already moved: friends who paid each other in cash have a real, settled debt the app would otherwise keep insisting is open.
+
+`settlements.method` distinguishes the two. A `stripe` settlement is created `pending` and only a webhook promotes it; a `cash` settlement is written `succeeded` on the payer's word, skips the Connect onboarding gate entirely, and is labelled as paid outside Squared everywhere it is shown. Both run through the same advisory-locked balance validation, so neither can settle a debt that is not owed or overpay one that is.
+
+**Rejected:** a boolean `is_cash` column, and inferring the distinction from a null checkout session id. The first cannot grow a third method; the second makes an absence carry meaning, which is how a nullable column becomes a bug.
+
 ### Stripe is called outside the database transaction
 Settlement validation and insertion happen inside one advisory-locked transaction; the Checkout session is created after it commits. Holding a transaction and a lock open across a third party's network latency is how a payment provider's slow day becomes your outage.
 
@@ -104,6 +111,12 @@ The browser's native validation bubbles block submission *silently* and cannot b
 
 ### Theme tokens are declared once with `light-dark()`
 A light block plus a duplicated dark block inside a media query always eventually drift apart. `color-scheme` decides which half resolves, which additionally makes native controls, scrollbars, and form widgets follow the theme for free.
+
+### Controls are 16px, everywhere, without exception
+iOS Safari zooms the page in when a focused input's text is under 16px, and does not zoom back out. The size lives in one shared `CONTROL_BASE` constant so no individual field can quietly reintroduce it. The two places that had overridden it to 14px and 15px were doing exactly that.
+
+### Hover-revealed controls are revealed by default on touch
+Edit and delete on an expense stay hidden until the row is hovered. A phone has no hover, which made the only way to fix a mistyped expense invisible on the device most likely to have mistyped it. The controls are visible by default and hidden only inside `@media (hover: hover)`, so the quiet desktop row survives without costing the phone its buttons.
 
 ### The theme control has three states
 A binary switch silently overrides the operating system forever, with no way back to following it.

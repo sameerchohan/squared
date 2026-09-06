@@ -269,7 +269,7 @@ export function ExpenseForm({
                   aria-pressed={on}
                   onClick={() => toggleParticipant(m.id)}
                   className={cx(
-                    "inline-flex h-9 cursor-pointer items-center gap-2 rounded-full border px-3 text-[13px] font-medium transition-colors duration-150",
+                    "inline-flex h-10 cursor-pointer items-center gap-2 rounded-full border px-3.5 text-[14px] font-medium transition-colors duration-150",
                     on
                       ? "border-[var(--brand)] bg-[var(--brand-subtle)] text-[var(--brand)]"
                       : "border-[var(--border-strong)] text-[var(--text-muted)] hover:bg-[var(--surface-subtle)]"
@@ -298,7 +298,7 @@ export function ExpenseForm({
                 <span className="flex-1 truncate text-[14px]">
                   {m.id === meId ? "You" : m.name}
                 </span>
-                <div className="relative w-28">
+                <div className="relative w-32">
                   {splitType === "exact" && (
                     <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[14px] text-[var(--text-faint)]">
                       $
@@ -308,7 +308,7 @@ export function ExpenseForm({
                     inputMode="decimal"
                     aria-label={`${splitType === "exact" ? "Amount" : "Percentage"} for ${m.name}`}
                     placeholder={splitType === "exact" ? "0.00" : "0"}
-                    className={cx("tnum h-9 text-[14px]", splitType === "exact" && "pl-6")}
+                    className={cx("tnum h-10 text-[16px]", splitType === "exact" && "pl-6")}
                     value={perUser[m.id] ?? ""}
                     onChange={(e) => {
                       setPerUser((prev) => ({ ...prev, [m.id]: e.target.value }));

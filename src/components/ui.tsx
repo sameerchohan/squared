@@ -156,8 +156,11 @@ export function Field({
   );
 }
 
+// 16px is not a taste decision: iOS Safari zooms the whole page in when a
+// focused control's text is smaller, and never zooms back out. Every control
+// in the app inherits this, so no field can reintroduce the bug locally.
 const CONTROL_BASE =
-  "h-11 w-full rounded-lg border bg-[var(--surface)] px-3 text-[15px] text-[var(--text)] " +
+  "h-11 w-full rounded-lg border bg-[var(--surface)] px-3 text-[16px] text-[var(--text)] " +
   "placeholder:text-[var(--text-faint)] transition-colors duration-150 " +
   "focus:border-[var(--brand)] disabled:cursor-not-allowed disabled:opacity-60";
 
@@ -381,7 +384,7 @@ export function Dialog({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 sm:items-center">
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:items-center">
       {/* The scrim is dark enough to isolate the panel rather than merely
           tint the page behind it. */}
       <div
@@ -440,10 +443,22 @@ export function ConfirmDialog({
         <p className="text-[14px] leading-relaxed text-[var(--text-muted)]">{body}</p>
         {error && <Alert>{error}</Alert>}
         <div className="flex justify-end gap-2">
-          <Button variant="secondary" size="sm" onClick={onClose} disabled={loading}>
+          <Button
+            variant="secondary"
+            size="sm"
+            className="h-11 sm:h-9"
+            onClick={onClose}
+            disabled={loading}
+          >
             Cancel
           </Button>
-          <Button variant="danger" size="sm" onClick={onConfirm} loading={loading}>
+          <Button
+            variant="danger"
+            size="sm"
+            className="h-11 sm:h-9"
+            onClick={onConfirm}
+            loading={loading}
+          >
             {confirmLabel}
           </Button>
         </div>
@@ -464,8 +479,9 @@ export function IconButton({
       aria-label={label}
       title={label}
       className={cx(
-        // 32px visual, but padding pushes the hit area toward the 44px floor.
-        "grid h-8 w-8 cursor-pointer place-items-center rounded-lg text-[var(--text-faint)]",
+        // 40px on a phone, where the finger is the pointer; 32px from the
+        // small breakpoint up, where a cursor makes that unnecessarily heavy.
+        "grid h-10 w-10 cursor-pointer place-items-center rounded-lg text-[var(--text-faint)] sm:h-8 sm:w-8",
         "transition-colors duration-150 hover:bg-[var(--surface-subtle)] hover:text-[var(--text)]",
         "disabled:pointer-events-none disabled:opacity-40",
         className

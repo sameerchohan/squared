@@ -33,6 +33,14 @@ export const SETTLEMENT_STATUSES = [
 ] as const;
 export type SettlementStatus = (typeof SETTLEMENT_STATUSES)[number];
 
+// How the money actually moved. "stripe" settlements are created pending and
+// only reach succeeded when a webhook says the charge cleared. "cash" ones
+// record a transfer that happened somewhere Squared cannot observe (Venmo,
+// notes, a bank app), so they are recorded already succeeded on the word of
+// the payer.
+export const SETTLEMENT_METHODS = ["stripe", "cash"] as const;
+export type SettlementMethod = (typeof SETTLEMENT_METHODS)[number];
+
 export const users = pgTable(
   "users",
   {
@@ -148,6 +156,7 @@ export const settlements = pgTable(
       .notNull()
       .references(() => users.id),
     amountCents: integer("amount_cents").notNull(),
+    method: text("method").notNull().default("stripe"),
     // The Checkout session is created with the settlement and is the
     // correlation key for webhooks; the payment intent and transfer ids only
     // become known once the payer completes checkout.
@@ -172,6 +181,7 @@ export const settlements = pgTable(
       "settlements_status_check",
       sql`${t.status} IN ('pending', 'processing', 'succeeded', 'failed')`
     ),
+    check("settlements_method_check", sql`${t.method} IN ('stripe', 'cash')`),
   ]
 );
 

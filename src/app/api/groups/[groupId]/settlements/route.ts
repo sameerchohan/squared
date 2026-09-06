@@ -13,13 +13,22 @@ import { appUrl, getStripe } from "@/server/stripe";
 const createSettlementSchema = z.object({
   toUser: z.uuid(),
   amountCents: z.number().int().positive().max(99_999_999),
+  // "cash" records a payment that already happened somewhere Squared cannot
+  // observe: Venmo, a bank transfer, notes across a table. It is recorded on
+  // the payer's word, which is why it is only offered between people who
+  // already share a group.
+  method: z.enum(["stripe", "cash"]).default("stripe"),
 });
 
 /**
  * Starts a settlement: validates it against balances recomputed inside a
- * transaction, records it as pending, then opens a Stripe Checkout session
- * that routes funds to the recipient's connected account (destination
- * charge). The webhook, not this route, marks it succeeded.
+ * transaction, then either opens a Stripe Checkout session that routes funds
+ * to the recipient's connected account (destination charge), or, for method
+ * "cash", records the transfer as already succeeded.
+ *
+ * Both paths share the same balance validation, so neither can settle a debt
+ * that isn't owed or overpay one that is. They differ only in who confirms
+ * the money moved: for Stripe that is the webhook, for cash it is the payer.
  */
 export const POST = apiHandler(
   async (req, ctx: RouteContext<"/api/groups/[groupId]/settlements">) => {
@@ -28,7 +37,7 @@ export const POST = apiHandler(
     await requireGroupMember(userId, groupId);
     enforceRateLimit(`settle:${userId}`, 10, 60_000);
 
-    const { toUser, amountCents } = createSettlementSchema.parse(
+    const { toUser, amountCents, method } = createSettlementSchema.parse(
       await req.json()
     );
 
@@ -97,9 +106,12 @@ export const POST = apiHandler(
       }
 
       // Hard gate: funds may only be routed to a fully enabled account.
+      // Cash settlements move no money through Stripe, so the recipient's
+      // Connect status is irrelevant to them.
       if (
-        recipient.stripeOnboardingStatus !== "active" ||
-        !recipient.stripeAccountId
+        method === "stripe" &&
+        (recipient.stripeOnboardingStatus !== "active" ||
+          !recipient.stripeAccountId)
       ) {
         throw new ApiError(
           409,
@@ -114,12 +126,24 @@ export const POST = apiHandler(
           fromUser: userId,
           toUser,
           amountCents,
-          status: "pending",
+          method,
+          // A cash settlement has already happened by the time it is
+          // recorded; there is no later event that would promote it.
+          status: method === "cash" ? "succeeded" : "pending",
         })
         .returning();
 
       return { ...created, recipient };
     });
+
+    // Cash is done at commit: the balances both people see already account
+    // for it, and there is no third party to call.
+    if (method === "cash") {
+      return Response.json(
+        { settlementId: settlement.id, checkoutUrl: null },
+        { status: 201 }
+      );
+    }
 
     // Stripe is called outside the transaction: holding a DB transaction open
     // across a network call would pin the advisory lock to a third party's
@@ -198,6 +222,7 @@ export const GET = apiHandler(
         fromUser: settlements.fromUser,
         toUser: settlements.toUser,
         amountCents: settlements.amountCents,
+        method: settlements.method,
         status: settlements.status,
         createdAt: settlements.createdAt,
       })

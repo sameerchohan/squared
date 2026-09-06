@@ -40,3 +40,7 @@ docker-compose.override.yml
 !*.tfvars.example
 .terraform.lock.hcl
 crash.log
+
+# Vercel CLI link metadata and pulled environment
+.vercel
+.env.trip

@@ -63,6 +63,7 @@ type Settlement = {
   fromUser: string;
   toUser: string;
   amountCents: number;
+  method: string;
   status: string;
   createdAt: string;
 };
@@ -231,8 +232,11 @@ export default function GroupPage() {
           </div>
         )}
 
+        {/* min-w-0 on both columns: without it a grid track sizes to its
+            content's min-content width, and one nowrap control inside a card
+            silently widens the whole page past the viewport on a phone. */}
         <div className="mt-7 grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
-          <div className="flex flex-col gap-6">
+          <div className="flex min-w-0 flex-col gap-6">
             <SettleUpCard
               groupId={groupId}
               balances={balances}
@@ -258,7 +262,7 @@ export default function GroupPage() {
             <SettlementHistory settlements={settlements} nameOf={nameOf} meId={me.id} />
           </div>
 
-          <div className="flex flex-col gap-6">
+          <div className="flex min-w-0 flex-col gap-6">
             <BalancesCard balances={balances} meId={me.id} />
             <MembersCard
               groupId={groupId}
@@ -306,7 +310,7 @@ function BalancesCard({
                   </span>
                 )}
               </span>
-              <span className="text-right">
+              <span className="shrink-0 text-right">
                 <span
                   className={cx(
                     "tnum block text-[14px] font-semibold",
@@ -346,6 +350,12 @@ function SettleUpCard({
 }) {
   const [error, setError] = useState<string | null>(null);
   const [payingTo, setPayingTo] = useState<string | null>(null);
+  // Recording a payment Squared didn't process is a claim about the real
+  // world that everyone else in the group has to take at face value, so it
+  // goes through a confirmation rather than a single click.
+  const [confirming, setConfirming] = useState<Transfer | null>(null);
+  const [confirmError, setConfirmError] = useState<string | null>(null);
+  const [recording, setRecording] = useState(false);
 
   const mine = balances.suggestedTransfers.filter((t) => t.fromUser === meId);
   const others = balances.suggestedTransfers.filter((t) => t.fromUser !== meId);
@@ -363,6 +373,29 @@ function SettleUpCard({
       setError(e instanceof Error ? e.message : "Couldn't start the payment.");
       setPayingTo(null);
       onChanged();
+    }
+  }
+
+  async function recordCash(transfer: Transfer) {
+    setConfirmError(null);
+    setRecording(true);
+    try {
+      await api(`/api/groups/${groupId}/settlements`, {
+        method: "POST",
+        body: {
+          toUser: transfer.toUser,
+          amountCents: transfer.amountCents,
+          method: "cash",
+        },
+      });
+      setConfirming(null);
+      onChanged();
+    } catch (e) {
+      setConfirmError(
+        e instanceof Error ? e.message : "Couldn't record that payment."
+      );
+    } finally {
+      setRecording(false);
     }
   }
 
@@ -400,19 +433,37 @@ function SettleUpCard({
                     </span>
                   </p>
                   {!canReceive && (
-                    <p className="mt-0.5 text-[12px] text-[var(--warning)]">
-                      {nameOf(t.toUser)} hasn&apos;t finished setting up payments yet.
+                    <p className="mt-0.5 text-[12px] text-[var(--text-muted)]">
+                      {nameOf(t.toUser)} can&apos;t take card payments here yet.
+                      Pay them however you normally do, then mark it paid.
                     </p>
                   )}
                 </div>
-                <Button
-                  size="sm"
-                  disabled={!canReceive || payingTo !== null}
-                  loading={payingTo === t.toUser}
-                  onClick={() => settleUp(t.toUser, t.amountCents)}
-                >
-                  Pay now
-                </Button>
+                <div className="flex w-full items-center gap-2 sm:w-auto">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="h-11 flex-1 sm:h-9 sm:flex-none"
+                    disabled={payingTo !== null}
+                    onClick={() => {
+                      setConfirmError(null);
+                      setConfirming(t);
+                    }}
+                  >
+                    Mark as paid
+                  </Button>
+                  {canReceive && (
+                    <Button
+                      size="sm"
+                      className="h-11 flex-1 sm:h-9 sm:flex-none"
+                      disabled={payingTo !== null}
+                      loading={payingTo === t.toUser}
+                      onClick={() => settleUp(t.toUser, t.amountCents)}
+                    >
+                      Pay now
+                    </Button>
+                  )}
+                </div>
               </li>
             );
           })}
@@ -434,10 +485,52 @@ function SettleUpCard({
         </ul>
 
         <p className="mt-4 border-t border-[var(--border)] pt-3 text-[12px] leading-relaxed text-[var(--text-faint)]">
-          Payments go through Stripe directly to the recipient&apos;s connected
-          account. Balances update automatically once a payment completes.
+          Card payments go through Stripe directly to the recipient&apos;s
+          connected account. Paid another way? Mark it as paid and everyone
+          in the group sees it settled.
         </p>
       </div>
+
+      <Dialog
+        open={confirming !== null}
+        onClose={() => {
+          if (recording) return;
+          setConfirming(null);
+          setConfirmError(null);
+        }}
+        title="Mark this as paid?"
+      >
+        <div className="flex flex-col gap-4 p-5">
+          <p className="text-[14px] leading-relaxed text-[var(--text-muted)]">
+            {confirming
+              ? `This records that you already sent ${nameOf(confirming.toUser)} ${formatCents(confirming.amountCents)} outside Squared. Their balance clears too, and everyone in the group sees the payment.`
+              : ""}
+          </p>
+          {confirmError && <Alert>{confirmError}</Alert>}
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              className="h-11 sm:h-9"
+              onClick={() => {
+                setConfirming(null);
+                setConfirmError(null);
+              }}
+              disabled={recording}
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              className="h-11 sm:h-9"
+              loading={recording}
+              onClick={() => confirming && recordCash(confirming)}
+            >
+              Yes, I paid them
+            </Button>
+          </div>
+        </div>
+      </Dialog>
     </Card>
   );
 }
@@ -499,29 +592,16 @@ function ExpenseList({
               const mine = expense.paidBy === meId;
               return (
                 <li key={expense.id} className="group/row px-5 py-4">
+                  {/* The description wraps rather than truncating: on a
+                      phone a clipped "Dinner at El F…" is the one thing in
+                      the row you cannot reconstruct from context. */}
                   <div className="flex items-baseline justify-between gap-3">
-                    <p className="min-w-0 flex-1 truncate text-[15px] font-medium">
+                    <p className="min-w-0 flex-1 text-[15px] font-medium break-words">
                       {expense.description}
                     </p>
                     <p className="figure shrink-0 text-[16px]">
                       {formatCents(expense.amountCents)}
                     </p>
-                    {/* Actions belong to whoever paid; they stay dim until the
-                        row is hovered or a control inside takes focus. */}
-                    {mine && (
-                      <div className="flex shrink-0 gap-0.5 opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover/row:opacity-100">
-                        <IconButton label="Edit expense" onClick={() => setEditing(expense)}>
-                          <PencilIcon className="h-4 w-4" />
-                        </IconButton>
-                        <IconButton
-                          label="Delete expense"
-                          onClick={() => setDeleting(expense)}
-                          className="hover:text-[var(--negative)]"
-                        >
-                          <TrashIcon className="h-4 w-4" />
-                        </IconButton>
-                      </div>
-                    )}
                   </div>
                   <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-[var(--text-muted)]">
                     <span>{mine ? "You" : nameOf(expense.paidBy)} paid</span>
@@ -534,6 +614,25 @@ function ExpenseList({
                         day: "numeric",
                       })}
                     </time>
+                    {/* Actions belong to whoever paid, and sit at the end of
+                        the meta line so they never eat the description's
+                        width. On a pointer device they stay hidden until the
+                        row is hovered or focused; on a touch screen, where
+                        neither happens, they are always visible. */}
+                    {mine && (
+                      <div className="-my-2 ml-auto flex shrink-0 gap-0.5 transition-opacity duration-150 focus-within:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/row:opacity-100">
+                        <IconButton label="Edit expense" onClick={() => setEditing(expense)}>
+                          <PencilIcon className="h-4 w-4" />
+                        </IconButton>
+                        <IconButton
+                          label="Delete expense"
+                          onClick={() => setDeleting(expense)}
+                          className="hover:text-[var(--negative)]"
+                        >
+                          <TrashIcon className="h-4 w-4" />
+                        </IconButton>
+                      </div>
+                    )}
                   </div>
                   <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-[var(--text-muted)]">
                     {expense.shares.map((sh) => (
@@ -642,15 +741,15 @@ function SettlementHistory({
                   <ArrowRightIcon className="mx-1.5 inline h-3.5 w-3.5 text-[var(--text-faint)]" />
                   {s.toUser === meId ? "you" : nameOf(s.toUser)}
                 </p>
-                <time
-                  dateTime={s.createdAt}
-                  className="text-[12px] text-[var(--text-muted)]"
-                >
-                  {new Date(s.createdAt).toLocaleDateString(undefined, {
-                    month: "short",
-                    day: "numeric",
-                  })}
-                </time>
+                <p className="text-[12px] text-[var(--text-muted)]">
+                  <time dateTime={s.createdAt}>
+                    {new Date(s.createdAt).toLocaleDateString(undefined, {
+                      month: "short",
+                      day: "numeric",
+                    })}
+                  </time>
+                  {s.method === "cash" && <span> · Paid outside Squared</span>}
+                </p>
               </div>
               <span className="tnum text-[14px] font-semibold">
                 {formatCents(s.amountCents)}
@@ -765,21 +864,29 @@ function MembersCard({
                       </span>
                     )}
                   </p>
-                  <p className="truncate text-[12px] text-[var(--text-muted)]">{m.email}</p>
+                  {/* basis-36 rather than a breakpoint: the badge drops to
+                      its own line exactly when the email would otherwise be
+                      squeezed to nothing, which depends on the card's width,
+                      not the window's. */}
+                  <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <p className="min-w-0 flex-1 basis-36 truncate text-[12px] text-[var(--text-muted)]">
+                      {m.email}
+                    </p>
+                    {m.stripeOnboardingStatus === "active" && (
+                      <span className="shrink-0">
+                        <Badge tone="positive">
+                          <CheckIcon className="h-3 w-3" />
+                          Can receive
+                        </Badge>
+                      </span>
+                    )}
+                  </div>
                 </div>
-                {m.stripeOnboardingStatus === "active" ? (
-                  <Badge tone="positive">
-                    <CheckIcon className="h-3 w-3" />
-                    Can receive
-                  </Badge>
-                ) : (
-                  <Badge tone="neutral">No payouts</Badge>
-                )}
                 {canRemove && members.length > 1 && (
                   <IconButton
                     label={self ? "Leave this group" : `Remove ${m.name}`}
                     onClick={() => setRemoving(m)}
-                    className="opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover/member:opacity-100 hover:text-[var(--negative)]"
+                    className="transition-opacity duration-150 focus-within:opacity-100 hover:text-[var(--negative)] [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/member:opacity-100"
                   >
                     <XIcon className="h-4 w-4" />
                   </IconButton>
