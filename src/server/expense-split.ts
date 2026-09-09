@@ -4,9 +4,14 @@
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { groupGuests, groupMembers } from "@/db/schema";
+import {
+  groupGuests,
+  groupMembers,
+  type StoredItemization,
+} from "@/db/schema";
 import { CoverageError, MAX_SHARES_PER_PERSON } from "@/lib/coverage-rules";
 import { computeShareRows, SplitError, type ShareRow } from "@/lib/splits";
+import { ReceiptError, splitReceipt } from "@/lib/receipt-split";
 import { ApiError } from "./errors";
 
 // A participant may arrive as a bare id, which still means one share. Older
@@ -48,6 +53,32 @@ export const splitSchema = z.discriminatedUnion("type", [
       .array(z.object({ userId: z.uuid(), percent: z.number().nonnegative() }))
       .min(1),
   }),
+  // What was typed into the itemised form. The browser sends the working, not
+  // the answer: the server does the arithmetic itself, so what is stored can
+  // never drift from what the numbers actually come to.
+  z.object({
+    type: z.literal("itemized"),
+    individual: z
+      .array(
+        z.object({
+          participantId: z.uuid(),
+          amountCents: z.number().int().nonnegative(),
+        })
+      )
+      .min(1),
+    items: z
+      .array(
+        z.object({
+          label: z.string().trim().max(60).nullish(),
+          amountCents: z.number().int().nonnegative(),
+          sharedBy: z.array(z.uuid()),
+        })
+      )
+      .max(100),
+    taxCents: z.number().int().nonnegative(),
+    tipCents: z.number().int().nonnegative(),
+    discountCents: z.number().int().nonnegative(),
+  }),
 ]);
 
 export type SplitInput = z.infer<typeof splitSchema>;
@@ -56,6 +87,12 @@ export type ResolvedSplit = {
   shares: ShareRow[];
   /** Guests counted in this expense, with the sponsor to record against them. */
   guests: { guestId: string; sponsorUserId: string }[];
+  /** What gets written to expenses.split_type. */
+  splitType: "equal" | "exact" | "percentage";
+  /** Set when the server worked the total out rather than being told it. */
+  amountCents?: number;
+  /** The working, kept so the expense can be reopened as it was filled in. */
+  itemization?: StoredItemization;
 };
 
 /**
@@ -77,6 +114,10 @@ export async function resolveSplit(
     .from(groupMembers)
     .where(eq(groupMembers.groupId, groupId));
   const memberIds = new Set(memberRows.map((m) => m.userId));
+
+  if (split.type === "itemized") {
+    return resolveItemized(groupId, paidBy, memberIds, split);
+  }
 
   const participants =
     split.type === "equal"
@@ -132,7 +173,7 @@ export async function resolveSplit(
         ? { type: "equal", participants, guests }
         : split
     );
-    return { shares, guests };
+    return { shares, guests, splitType: split.type };
   } catch (error) {
     // A split that does not add up is the caller's mistake, not a server
     // fault, and the message is written to be shown to a person as-is.
@@ -141,6 +182,122 @@ export async function resolveSplit(
     }
     throw error;
   }
+}
+
+/**
+ * Work an itemised bill out from what was typed in.
+ *
+ * Every participant is a member or a guest of this group. Guests are looked up
+ * including archived ones, so an expense recorded months ago still opens and
+ * saves; a guest who has appeared in an expense is archived rather than
+ * deleted precisely so this keeps working.
+ *
+ * A guest cannot hold a balance, so once the arithmetic is done their money is
+ * moved onto whoever covers them. That happens after the split, not before, so
+ * the itemisation keeps each person's own figures and the total is only ever
+ * regrouped, never recalculated.
+ */
+async function resolveItemized(
+  groupId: string,
+  paidBy: string,
+  memberIds: Set<string>,
+  split: Extract<SplitInput, { type: "itemized" }>
+): Promise<ResolvedSplit> {
+  if (!memberIds.has(paidBy)) {
+    throw new ApiError(400, "All participants must be group members");
+  }
+
+  const guestRows = await db
+    .select({ id: groupGuests.id, sponsorUserId: groupGuests.sponsorUserId })
+    .from(groupGuests)
+    .where(eq(groupGuests.groupId, groupId));
+  const sponsorOf = new Map(guestRows.map((g) => [g.id, g.sponsorUserId]));
+
+  const listed = new Set(split.individual.map((o) => o.participantId));
+  if (listed.size !== split.individual.length) {
+    throw new ApiError(400, "A person appears more than once on this bill");
+  }
+  for (const id of listed) {
+    if (!memberIds.has(id) && !sponsorOf.has(id)) {
+      throw new ApiError(400, "All participants must be group members");
+    }
+  }
+  for (const item of split.items) {
+    for (const id of item.sharedBy) {
+      if (!listed.has(id)) {
+        throw new ApiError(400, "Somebody sharing an item is not on this bill");
+      }
+    }
+  }
+
+  let breakdown;
+  try {
+    breakdown = splitReceipt(
+      split.individual.map((o) => ({
+        userId: o.participantId,
+        subtotalCents: o.amountCents,
+      })),
+      split.items.map((item) => ({
+        label: item.label ?? undefined,
+        amountCents: item.amountCents,
+        sharedBy: item.sharedBy,
+      })),
+      split.taxCents,
+      split.tipCents,
+      split.discountCents
+    );
+  } catch (error) {
+    if (error instanceof ReceiptError) throw new ApiError(400, error.message);
+    throw error;
+  }
+
+  if (breakdown.totalCents > 99_999_999) {
+    throw new ApiError(400, "That is more than one expense can hold");
+  }
+
+  const owedByMember = new Map<string, number>();
+  for (const line of breakdown.lines) {
+    const owner = sponsorOf.get(line.userId) ?? line.userId;
+    owedByMember.set(owner, (owedByMember.get(owner) ?? 0) + line.owedCents);
+  }
+
+  const shares: ShareRow[] = [...owedByMember]
+    .filter(([, cents]) => cents > 0)
+    .map(([userId, owedCents]) => ({
+      userId,
+      owedCents,
+      shareCount: 1,
+      coveredBy: null,
+    }));
+  if (shares.length === 0) {
+    throw new ApiError(400, "Nobody is paying for this");
+  }
+
+  const guests = breakdown.lines
+    .filter((line) => sponsorOf.has(line.userId) && line.subtotalCents > 0)
+    .map((line) => ({
+      guestId: line.userId,
+      sponsorUserId: sponsorOf.get(line.userId)!,
+    }));
+
+  return {
+    shares,
+    guests,
+    splitType: "exact",
+    amountCents: breakdown.totalCents,
+    itemization: {
+      version: 1,
+      individual: split.individual,
+      items: split.items.map((item) => ({
+        label: item.label?.trim() || null,
+        amountCents: item.amountCents,
+        sharedBy: item.sharedBy,
+      })),
+      taxCents: split.taxCents,
+      tipCents: split.tipCents,
+      discountCents: split.discountCents,
+    },
+  };
 }
 
 /** Look up guests by id, refusing any that aren't a live guest of this group. */

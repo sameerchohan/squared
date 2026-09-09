@@ -32,12 +32,16 @@ export const POST = apiHandler(
     const body = createExpenseSchema.parse(await req.json());
     const paidBy = body.paidBy ?? userId;
 
-    const { shares, guests } = await resolveSplit(
+    const { shares, guests, splitType, amountCents, itemization } =
+      await resolveSplit(
       groupId,
       paidBy,
       body.amountCents,
       body.split
     );
+    // An itemised bill adds itself up on the server, so what the browser
+    // thought the total was never gets stored.
+    const total = amountCents ?? body.amountCents;
 
     const expense = await db.transaction(async (tx) => {
       const [created] = await tx
@@ -46,8 +50,9 @@ export const POST = apiHandler(
           groupId,
           paidBy,
           description: body.description,
-          amountCents: body.amountCents,
-          splitType: body.split.type,
+          amountCents: total,
+          splitType,
+          itemization,
         })
         .returning();
       await tx.insert(expenseShares).values(

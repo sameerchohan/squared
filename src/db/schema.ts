@@ -3,6 +3,7 @@ import {
   check,
   index,
   integer,
+  jsonb,
   pgTable,
   primaryKey,
   text,
@@ -94,6 +95,30 @@ export const groupMembers = pgTable(
   ]
 );
 
+/**
+ * How an itemised expense was filled in: what each person had to themselves,
+ * what the group shared and who was in on each of it, and the charges on top.
+ *
+ * Held as a document rather than in tables of its own. It is only ever read
+ * and written whole, alongside its expense, and never queried across expenses,
+ * so rows would buy nothing; and a participant here can be a member or a
+ * guest, which relationally would mean a pair of nullable keys and a
+ * constraint to keep exactly one of them filled.
+ *
+ * It is a record of the working, not the ledger. What anybody actually owes
+ * lives in expense_shares, with real foreign keys, and is recomputed from this
+ * on the server rather than taken from whatever the browser worked out.
+ */
+export type StoredItemization = {
+  version: 1;
+  /** Keyed by user id or guest id. */
+  individual: { participantId: string; amountCents: number }[];
+  items: { label: string | null; amountCents: number; sharedBy: string[] }[];
+  taxCents: number;
+  tipCents: number;
+  discountCents: number;
+};
+
 export const expenses = pgTable(
   "expenses",
   {
@@ -107,6 +132,9 @@ export const expenses = pgTable(
     description: text("description").notNull(),
     amountCents: integer("amount_cents").notNull(),
     splitType: text("split_type").notNull(),
+    // Present only when the expense was worked out item by item. The split
+    // type stays "exact", because exact amounts are what this produces.
+    itemization: jsonb("itemization").$type<StoredItemization>(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

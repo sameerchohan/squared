@@ -36,6 +36,7 @@ import {
   XIcon,
 } from "@/components/icons";
 import { api, UnauthorizedError } from "@/lib/client";
+import type { StoredItemization } from "@/db/schema";
 import { formatCents } from "@/lib/format";
 
 type Me = { id: string; name: string; email: string };
@@ -66,6 +67,7 @@ type Expense = {
     coveredBy: string | null;
   }[];
   guests: { guestId: string; name: string; sponsorUserId: string }[];
+  itemization: StoredItemization | null;
 };
 type Transfer = { fromUser: string; toUser: string; amountCents: number };
 type Balances = {
@@ -656,7 +658,11 @@ function ExpenseList({
                   <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-[var(--text-muted)]">
                     <span>{mine ? "You" : nameOf(expense.paidBy)} paid</span>
                     <span aria-hidden="true">·</span>
-                    <Badge>{SPLIT_LABEL[expense.splitType] ?? expense.splitType}</Badge>
+                    <Badge>
+                      {expense.itemization
+                        ? "Itemised"
+                        : (SPLIT_LABEL[expense.splitType] ?? expense.splitType)}
+                    </Badge>
                     <span aria-hidden="true">·</span>
                     <time dateTime={expense.createdAt}>
                       {new Date(expense.createdAt).toLocaleDateString(undefined, {
@@ -734,7 +740,19 @@ function ExpenseList({
         {editing && (
           <ExpenseForm
             members={members}
-            guests={groupGuests}
+            // Guests this expense used may since have been archived, and an
+            // archived guest is no longer in the group's live list. Merging
+            // them back in is what lets an old bill still open and save.
+            guests={[
+              ...groupGuests,
+              ...editing.guests
+                .filter((g) => !groupGuests.some((live) => live.id === g.guestId))
+                .map((g) => ({
+                  id: g.guestId,
+                  name: g.name,
+                  sponsorUserId: g.sponsorUserId,
+                })),
+            ]}
             meId={meId}
             submitLabel="Save changes"
             onCancel={() => setEditing(null)}
@@ -745,6 +763,7 @@ function ExpenseList({
               splitType: editing.splitType as "equal" | "exact" | "percentage",
               shares: editing.shares,
               guests: editing.guests,
+              itemization: editing.itemization,
             }}
             onSubmit={async (payload) => {
               await api(`/api/groups/${groupId}/expenses/${editing.id}`, {

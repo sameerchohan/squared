@@ -12,6 +12,12 @@ import {
 import { formatCents, parseDollarsToCents } from "@/lib/format";
 import { MAX_SHARES_PER_PERSON } from "@/lib/coverage-rules";
 import { splitReceipt, type SharedItem } from "@/lib/receipt-split";
+import type { StoredItemization } from "@/db/schema";
+
+/** Cents back into something typeable, blank when there is nothing to show. */
+function centsToInput(cents: number | undefined): string {
+  return cents ? (cents / 100).toFixed(2) : "";
+}
 
 /**
  * Percentages are summed as floats, so 33.33 + 33.33 + 33.34 lands on
@@ -43,6 +49,8 @@ export type ExpenseDraft = {
     coveredBy?: string | null;
   }[];
   guests?: { guestId: string; sponsorUserId: string }[];
+  /** Present when the expense was worked out item by item. */
+  itemization?: StoredItemization | null;
 };
 
 type Errors = {
@@ -148,6 +156,23 @@ function computeReceipt(
     valid: true as const,
     reason: null,
     breakdown,
+    // What gets sent: the numbers as typed. The server runs the same
+    // calculation over them, so the stored split is never the browser's word.
+    payload: {
+      type: "itemized" as const,
+      individual: individual.map((o) => ({
+        participantId: o.userId,
+        amountCents: o.subtotalCents,
+      })),
+      items: shared.map((item) => ({
+        label: item.label ?? null,
+        amountCents: item.amountCents,
+        sharedBy: item.sharedBy,
+      })),
+      taxCents: tax,
+      tipCents: tip,
+      discountCents: discount,
+    },
     byPerson,
     owedByMember,
     guestIds,
@@ -192,7 +217,11 @@ export function ExpenseForm({
     initial ? (initial.amountCents / 100).toFixed(2) : ""
   );
   const [paidBy, setPaidBy] = useState(initial?.paidBy ?? meId);
-  const [splitType, setSplitType] = useState<SplitMode>(initial?.splitType ?? "equal");
+  const [splitType, setSplitType] = useState<SplitMode>(
+    // An itemised bill is stored as an exact split, so the breakdown is what
+    // says how it was actually filled in.
+    initial?.itemization ? "itemized" : (initial?.splitType ?? "equal")
+  );
   const [selected, setSelected] = useState<Set<string> | null>(
     initial?.splitType === "equal"
       ? new Set(initial.shares.map((s) => s.userId))
@@ -247,16 +276,41 @@ export function ExpenseForm({
   // Itemised entry: what each person's own order came to, plus the two numbers
   // at the bottom of the receipt. Keyed by member id or guest id, which are
   // both uuids and so cannot collide.
-  const [orderAmounts, setOrderAmounts] = useState<Record<string, string>>({});
+  const [orderAmounts, setOrderAmounts] = useState<Record<string, string>>(
+    () => {
+      const out: Record<string, string> = {};
+      for (const line of initial?.itemization?.individual ?? []) {
+        if (line.amountCents > 0) {
+          out[line.participantId] = centsToInput(line.amountCents);
+        }
+      }
+      return out;
+    }
+  );
   // Optional: the total printed on the receipt. Typing it turns the form into
   // its own check, which is the only way to catch a line nobody entered.
   const [receiptTotalInput, setReceiptTotalInput] = useState("");
   const checkId = useId();
-  const [sharedItems, setSharedItems] = useState<SharedDraft[]>([]);
+  const [sharedItems, setSharedItems] = useState<SharedDraft[]>(() =>
+    (initial?.itemization?.items ?? []).map((item, index) => ({
+      // Positional rather than random, so restoring a saved bill does not
+      // depend on crypto being reachable wherever this first renders.
+      id: `saved-${index}`,
+      label: item.label ?? "",
+      amount: centsToInput(item.amountCents),
+      sharedBy: item.sharedBy,
+    }))
+  );
   const [openSharers, setOpenSharers] = useState<string | null>(null);
-  const [taxInput, setTaxInput] = useState("");
-  const [tipInput, setTipInput] = useState("");
-  const [discountInput, setDiscountInput] = useState("");
+  const [taxInput, setTaxInput] = useState(() =>
+    centsToInput(initial?.itemization?.taxCents)
+  );
+  const [tipInput, setTipInput] = useState(() =>
+    centsToInput(initial?.itemization?.tipCents)
+  );
+  const [discountInput, setDiscountInput] = useState(() =>
+    centsToInput(initial?.itemization?.discountCents)
+  );
   const [errors, setErrors] = useState<Errors>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -515,13 +569,7 @@ export function ExpenseForm({
 
     const split =
       bill !== null
-        ? {
-            type: "exact",
-            shares: [...bill.owedByMember]
-              .filter(([, cents]) => cents > 0)
-              .map(([userId, amountCents]) => ({ userId, amountCents })),
-            guestIds: bill.guestIds,
-          }
+        ? bill.payload
         : splitType === "equal"
         ? {
             type: "equal",

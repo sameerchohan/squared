@@ -52,21 +52,26 @@ export const PATCH = apiHandler(
 
     const body = updateSchema.parse(await req.json());
 
-    const { shares, guests } = await resolveSplit(
+    const { shares, guests, splitType, amountCents, itemization } =
+      await resolveSplit(
       groupId,
       body.paidBy,
       body.amountCents,
       body.split
     );
+    const total = amountCents ?? body.amountCents;
 
     const updated = await db.transaction(async (tx) => {
       const [row] = await tx
         .update(expenses)
         .set({
           description: body.description,
-          amountCents: body.amountCents,
+          amountCents: total,
           paidBy: body.paidBy,
-          splitType: body.split.type,
+          splitType,
+          // Cleared when an expense stops being itemised, so a stale breakdown
+          // can never be reopened against amounts that have since changed.
+          itemization: itemization ?? null,
         })
         .where(eq(expenses.id, expenseId))
         .returning();
