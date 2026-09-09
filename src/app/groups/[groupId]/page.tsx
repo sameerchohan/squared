@@ -17,6 +17,7 @@ import {
   Field,
   IconButton,
   Input,
+  Select,
   Skeleton,
   cx,
 } from "@/components/ui";
@@ -44,6 +45,12 @@ type Member = {
   stripeOnboardingStatus: string;
 };
 type Group = { id: string; name: string; createdBy: string };
+type Guest = {
+  id: string;
+  name: string;
+  sponsorUserId: string;
+  sponsorName: string;
+};
 type Expense = {
   id: string;
   paidBy: string;
@@ -51,7 +58,13 @@ type Expense = {
   amountCents: number;
   splitType: string;
   createdAt: string;
-  shares: { userId: string; owedCents: number }[];
+  shares: {
+    userId: string;
+    owedCents: number;
+    shareCount: number;
+    coveredBy: string | null;
+  }[];
+  guests: { guestId: string; name: string; sponsorUserId: string }[];
 };
 type Transfer = { fromUser: string; toUser: string; amountCents: number };
 type Balances = {
@@ -75,6 +88,7 @@ export default function GroupPage() {
   const [me, setMe] = useState<Me | null>(null);
   const [group, setGroup] = useState<Group | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
+  const [guests, setGuests] = useState<Guest[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [balances, setBalances] = useState<Balances | null>(null);
   const [settlements, setSettlements] = useState<Settlement[]>([]);
@@ -91,15 +105,17 @@ export default function GroupPage() {
     Promise.all([
       api<{ user: Me }>("/api/auth/me"),
       api<{ group: Group; members: Member[] }>(`/api/groups/${groupId}`),
+      api<{ guests: Guest[] }>(`/api/groups/${groupId}/guests`),
       api<{ expenses: Expense[] }>(`/api/groups/${groupId}/expenses`),
       api<Balances>(`/api/groups/${groupId}/balances`),
       api<{ settlements: Settlement[] }>(`/api/groups/${groupId}/settlements`),
     ])
-      .then(([meRes, detail, expensesRes, balancesRes, settlementsRes]) => {
+      .then(([meRes, detail, guestsRes, expensesRes, balancesRes, settlementsRes]) => {
         if (cancelled) return;
         setMe(meRes.user);
         setGroup(detail.group);
         setMembers(detail.members);
+        setGuests(guestsRes.guests);
         setExpenses(expensesRes.expenses);
         setBalances(balancesRes);
         setSettlements(settlementsRes.settlements);
@@ -248,6 +264,7 @@ export default function GroupPage() {
             <AddExpenseCard
               groupId={groupId}
               members={members}
+              guests={guests}
               meId={me.id}
               onChanged={reload}
             />
@@ -255,6 +272,7 @@ export default function GroupPage() {
               groupId={groupId}
               expenses={expenses}
               members={members}
+              groupGuests={guests}
               nameOf={nameOf}
               meId={me.id}
               onChanged={reload}
@@ -271,6 +289,13 @@ export default function GroupPage() {
               createdBy={group.createdBy}
               onChanged={reload}
               onLeft={() => router.push("/")}
+            />
+            <GuestsCard
+              groupId={groupId}
+              guests={guests}
+              members={members}
+              meId={me.id}
+              onChanged={reload}
             />
           </div>
         </div>
@@ -545,6 +570,7 @@ function ExpenseList({
   groupId,
   expenses,
   members,
+  groupGuests,
   nameOf,
   meId,
   onChanged,
@@ -552,6 +578,7 @@ function ExpenseList({
   groupId: string;
   expenses: Expense[];
   members: Member[];
+  groupGuests: Guest[];
   nameOf: (id: string) => string;
   meId: string;
   onChanged: () => void;
@@ -635,12 +662,36 @@ function ExpenseList({
                     )}
                   </div>
                   <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-[var(--text-muted)]">
-                    {expense.shares.map((sh) => (
-                      <li key={sh.userId} className="tnum">
-                        {sh.userId === meId ? "You" : nameOf(sh.userId)}{" "}
-                        <span className="font-medium text-[var(--text)]">
-                          {formatCents(sh.owedCents)}
-                        </span>
+                    {expense.shares.map((sh) => {
+                      const who = sh.userId === meId ? "You" : nameOf(sh.userId);
+                      // Somebody else picked this up. Their row stays so the
+                      // expense still shows they were there, owing nothing.
+                      if (sh.coveredBy) {
+                        return (
+                          <li key={sh.userId}>
+                            {who} covered by{" "}
+                            {sh.coveredBy === meId ? "you" : nameOf(sh.coveredBy)}
+                          </li>
+                        );
+                      }
+                      return (
+                        <li key={sh.userId} className="tnum">
+                          {who}
+                          {sh.shareCount > 1 && (
+                            <span className="ml-1 font-medium text-[var(--brand)]">
+                              &times;{sh.shareCount}
+                            </span>
+                          )}{" "}
+                          <span className="font-medium text-[var(--text)]">
+                            {formatCents(sh.owedCents)}
+                          </span>
+                        </li>
+                      );
+                    })}
+                    {expense.guests.map((g) => (
+                      <li key={g.guestId}>
+                        {g.name} (guest) covered by{" "}
+                        {g.sponsorUserId === meId ? "you" : nameOf(g.sponsorUserId)}
                       </li>
                     ))}
                   </ul>
@@ -660,6 +711,7 @@ function ExpenseList({
         {editing && (
           <ExpenseForm
             members={members}
+            guests={groupGuests}
             meId={meId}
             submitLabel="Save changes"
             onCancel={() => setEditing(null)}
@@ -669,6 +721,7 @@ function ExpenseList({
               paidBy: editing.paidBy,
               splitType: editing.splitType as "equal" | "exact" | "percentage",
               shares: editing.shares,
+              guests: editing.guests,
             }}
             onSubmit={async (payload) => {
               await api(`/api/groups/${groupId}/expenses/${editing.id}`, {
@@ -943,14 +996,187 @@ function MembersCard({
   );
 }
 
-function AddExpenseCard({
+/**
+ * Guests are people on the trip with no Squared account: a partner, a kid, a
+ * friend who never signed up. They hold no balance of their own, because they
+ * have no way to pay one. Their share of an expense is charged to whoever
+ * covers them, which is why every guest must name a sponsor.
+ */
+function GuestsCard({
   groupId,
+  guests,
   members,
   meId,
   onChanged,
 }: {
   groupId: string;
+  guests: Guest[];
   members: Member[];
+  meId: string;
+  onChanged: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [sponsorUserId, setSponsorUserId] = useState(meId);
+  const [fieldError, setFieldError] = useState<string | undefined>();
+  const [formError, setFormError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [removing, setRemoving] = useState<Guest | null>(null);
+  const [removeBusy, setRemoveBusy] = useState(false);
+  const [removeError, setRemoveError] = useState<string | null>(null);
+
+  async function addGuest(event: React.FormEvent) {
+    event.preventDefault();
+    setFormError(null);
+    const value = name.trim();
+    if (!value) {
+      setFieldError("Give them a name.");
+      return;
+    }
+    setFieldError(undefined);
+    setSubmitting(true);
+    try {
+      await api(`/api/groups/${groupId}/guests`, {
+        method: "POST",
+        body: { name: value, sponsorUserId },
+      });
+      setName("");
+      onChanged();
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : "Couldn't add that guest.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function confirmRemove() {
+    if (!removing) return;
+    setRemoveBusy(true);
+    setRemoveError(null);
+    try {
+      await api(`/api/groups/${groupId}/guests/${removing.id}`, {
+        method: "DELETE",
+      });
+      setRemoving(null);
+      onChanged();
+    } catch (e) {
+      setRemoveError(
+        e instanceof Error ? e.message : "Couldn't remove that guest."
+      );
+    } finally {
+      setRemoveBusy(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader
+        title="Guests"
+        description="People here without an account. Their share is paid by whoever covers them."
+      />
+
+      {guests.length === 0 ? (
+        <EmptyState
+          icon={<UsersIcon className="h-5 w-5" />}
+          title="No guests yet"
+          description="Add someone along for the trip who isn't on Squared, like a partner or a kid."
+        />
+      ) : (
+        <ul className="divide-y divide-[var(--border)]">
+          {guests.map((g) => (
+            <li key={g.id} className="flex items-center gap-3 px-5 py-3">
+              <Avatar name={g.name} className="h-8 w-8 shrink-0 text-[12px]" />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[14px] font-medium">{g.name}</p>
+                <p className="truncate text-[12px] text-[var(--text-muted)]">
+                  Covered by{" "}
+                  {g.sponsorUserId === meId ? "you" : g.sponsorName}
+                </p>
+              </div>
+              <IconButton
+                label={`Remove ${g.name}`}
+                onClick={() => setRemoving(g)}
+                className="hover:text-[var(--negative)]"
+              >
+                <TrashIcon className="h-4 w-4" />
+              </IconButton>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <form
+        onSubmit={addGuest}
+        noValidate
+        className="flex flex-col gap-3 border-t border-[var(--border)] p-5"
+      >
+        {formError && <Alert>{formError}</Alert>}
+        <Field label="Name" error={fieldError}>
+          {({ id, describedBy, invalid }) => (
+            <Input
+              id={id}
+              aria-describedby={describedBy}
+              placeholder="Sara"
+              maxLength={80}
+              value={name}
+              invalid={invalid}
+              onChange={(e) => {
+                setName(e.target.value);
+                if (fieldError) setFieldError(undefined);
+              }}
+            />
+          )}
+        </Field>
+        <Field label="Covered by">
+          {({ id }) => (
+            <Select
+              id={id}
+              value={sponsorUserId}
+              onChange={(e) => setSponsorUserId(e.target.value)}
+            >
+              {members.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.id === meId ? "You" : m.name}
+                </option>
+              ))}
+            </Select>
+          )}
+        </Field>
+        <Button type="submit" variant="secondary" loading={submitting}>
+          Add guest
+        </Button>
+      </form>
+
+      <ConfirmDialog
+        open={removing !== null}
+        onClose={() => {
+          setRemoving(null);
+          setRemoveError(null);
+        }}
+        onConfirm={confirmRemove}
+        title="Remove this guest?"
+        body={
+          removing
+            ? `${removing.name} will stop appearing when you add an expense. Expenses they were already part of keep their record exactly as it is.`
+            : ""
+        }
+        confirmLabel="Remove guest"
+        loading={removeBusy}
+        error={removeError}
+      />
+    </Card>
+  );
+}
+
+function AddExpenseCard({
+  groupId,
+  members,
+  guests,
+  meId,
+  onChanged,
+}: {
+  groupId: string;
+  members: Member[];
+  guests: Guest[];
   meId: string;
   onChanged: () => void;
 }) {
@@ -967,6 +1193,7 @@ function AddExpenseCard({
       )}
       <ExpenseForm
         members={members}
+        guests={guests}
         meId={meId}
         submitLabel="Add expense"
         onSubmit={async (payload) => {

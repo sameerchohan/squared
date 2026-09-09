@@ -1,19 +1,36 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Alert, Avatar, Button, Field, Input, Select, cx } from "./ui";
+import { Alert, Avatar, Button, Field, IconButton, Input, Select, cx } from "./ui";
 import { AlertIcon, CheckIcon } from "./icons";
 import { formatCents, parseDollarsToCents } from "@/lib/format";
+import { MAX_SHARES_PER_PERSON } from "@/lib/coverage-rules";
+
+/**
+ * Percentages are summed as floats, so 33.33 + 33.33 + 33.34 lands on
+ * 100.00000000000001. Trim that noise off anything shown to a person.
+ */
+function formatPercent(value: number): string {
+  return `${Number(value.toFixed(2))}%`;
+}
 
 export type SplitType = "equal" | "exact" | "percentage";
 export type FormMember = { id: string; name: string };
+/** Somebody on the trip with no account, whose share lands on their sponsor. */
+export type FormGuest = { id: string; name: string; sponsorUserId: string };
 
 export type ExpenseDraft = {
   description: string;
   amountCents: number;
   paidBy: string;
   splitType: SplitType;
-  shares: { userId: string; owedCents: number }[];
+  shares: {
+    userId: string;
+    owedCents: number;
+    shareCount?: number;
+    coveredBy?: string | null;
+  }[];
+  guests?: { guestId: string; sponsorUserId: string }[];
 };
 
 type Errors = {
@@ -30,6 +47,7 @@ type Errors = {
  */
 export function ExpenseForm({
   members,
+  guests = [],
   meId,
   initial,
   submitLabel,
@@ -37,6 +55,7 @@ export function ExpenseForm({
   onCancel,
 }: {
   members: FormMember[];
+  guests?: FormGuest[];
   meId: string;
   initial?: ExpenseDraft;
   submitLabel: string;
@@ -73,6 +92,38 @@ export function ExpenseForm({
       ])
     );
   });
+  // Covering state for equal splits. Held apart from `selected` so toggling
+  // somebody out of an expense and back does not lose who they were covering.
+  const [selectedGuests, setSelectedGuests] = useState<Set<string>>(
+    () => new Set((initial?.guests ?? []).map((g) => g.guestId))
+  );
+  const [coveredBy, setCoveredBy] = useState<Record<string, string>>(() => {
+    const out: Record<string, string> = {};
+    for (const share of initial?.shares ?? []) {
+      if (share.coveredBy) out[share.userId] = share.coveredBy;
+    }
+    return out;
+  });
+  const [ownShares, setOwnShares] = useState<Record<string, number>>(() => {
+    // Recover each person's own share count from what was stored: their total
+    // less the guests they sponsored and the members they covered.
+    const out: Record<string, number> = {};
+    if (!initial || initial.splitType !== "equal") return out;
+    for (const share of initial.shares) {
+      if (share.coveredBy) continue;
+      const covering = initial.shares.filter(
+        (o) => o.coveredBy === share.userId
+      ).length;
+      const sponsoring = (initial.guests ?? []).filter(
+        (g) => g.sponsorUserId === share.userId
+      ).length;
+      out[share.userId] = Math.max(
+        0,
+        (share.shareCount ?? 1) - covering - sponsoring
+      );
+    }
+    return out;
+  });
   const [errors, setErrors] = useState<Errors>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -98,6 +149,88 @@ export function ExpenseForm({
     return total;
   }, [splitType, perUser, members]);
 
+  // What is still unassigned, in whatever unit this split is expressed in.
+  // Null when there is nothing to measure against: an equal split, a field
+  // that will not parse, or an exact split before a total has been typed.
+  const remaining = useMemo(() => {
+    if (allocated === null) return null;
+    if (splitType === "percentage") return Number((100 - allocated).toFixed(2));
+    if (amountCents === null) return null;
+    return amountCents - allocated;
+  }, [allocated, splitType, amountCents]);
+
+  /**
+   * What each member is paying for: their own shares, plus one for every guest
+   * they sponsor and every member they cover. The total is the number of ways
+   * the expense divides, which is the number people count on their fingers.
+   */
+  const weights = useMemo(() => {
+    const out = new Map<string, number>();
+    for (const id of participants) {
+      out.set(id, coveredBy[id] ? 0 : (ownShares[id] ?? 1));
+    }
+    for (const id of participants) {
+      const coverer = coveredBy[id];
+      if (coverer && out.has(coverer)) {
+        out.set(coverer, (out.get(coverer) ?? 0) + 1);
+      }
+    }
+    for (const guest of guests) {
+      if (!selectedGuests.has(guest.id)) continue;
+      out.set(
+        guest.sponsorUserId,
+        (out.get(guest.sponsorUserId) ?? 0) + 1
+      );
+    }
+    return out;
+  }, [participants, coveredBy, ownShares, guests, selectedGuests]);
+
+  const totalShares = useMemo(
+    () => [...weights.values()].reduce((sum, w) => sum + w, 0),
+    [weights]
+  );
+
+  // Somebody covering a guest at something they skipped themselves. They are
+  // not "in" the expense, but they still have to be listed so the guest's
+  // share has a row to land on.
+  const absentSponsors = useMemo(
+    () =>
+      [
+        ...new Set(
+          guests
+            .filter(
+              (g) => selectedGuests.has(g.id) && !participants.has(g.sponsorUserId)
+            )
+            .map((g) => g.sponsorUserId)
+        ),
+      ],
+    [guests, selectedGuests, participants]
+  );
+
+  function toggleGuest(id: string) {
+    setSelectedGuests((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+    if (errors.split) setErrors((p) => ({ ...p, split: undefined }));
+  }
+
+  function setOwnShareCount(id: string, count: number) {
+    setOwnShares((prev) => ({
+      ...prev,
+      [id]: Math.min(MAX_SHARES_PER_PERSON, Math.max(0, count)),
+    }));
+  }
+
+  /** Who may cover this member: anyone else here who is not covered already. */
+  function coverCandidates(forId: string) {
+    return members.filter(
+      (m) => m.id !== forId && participants.has(m.id) && !coveredBy[m.id]
+    );
+  }
+
   function toggleParticipant(id: string) {
     const next = new Set(participants);
     if (next.has(id)) next.delete(id);
@@ -113,7 +246,11 @@ export function ExpenseForm({
     else if (amountCents === 0) next.amount = "Amount must be more than zero.";
 
     if (splitType === "equal") {
-      if (participants.size === 0) next.split = "Pick at least one person.";
+      if (participants.size === 0 && selectedGuests.size === 0) {
+        next.split = "Pick at least one person.";
+      } else if (totalShares === 0) {
+        next.split = "Nobody is paying for this yet.";
+      }
     } else if (allocated === null) {
       next.split = "Every value must be a number.";
     } else if (splitType === "exact" && amountCents !== null && allocated !== amountCents) {
@@ -123,7 +260,7 @@ export function ExpenseForm({
           ? `${formatCents(diff)} still unallocated.`
           : `${formatCents(-diff)} over the total.`;
     } else if (splitType === "percentage" && Math.abs(allocated - 100) > 0.001) {
-      next.split = `Percentages add up to ${allocated}%, not 100%.`;
+      next.split = `Percentages add up to ${formatPercent(allocated)}, not 100%.`;
     }
     return next;
   }
@@ -137,7 +274,18 @@ export function ExpenseForm({
 
     const split =
       splitType === "equal"
-        ? { type: "equal", participants: [...participants] }
+        ? {
+            type: "equal",
+            participants: [
+              ...[...participants].map((id) =>
+                coveredBy[id]
+                  ? { userId: id, coveredBy: coveredBy[id] }
+                  : { userId: id, shares: ownShares[id] ?? 1 }
+              ),
+              ...absentSponsors.map((id) => ({ userId: id, shares: 0 })),
+            ],
+            guestIds: [...selectedGuests],
+          }
         : splitType === "exact"
           ? {
               type: "exact",
@@ -167,6 +315,9 @@ export function ExpenseForm({
         setDescription("");
         setAmount("");
         setPerUser({});
+        setSelectedGuests(new Set());
+        setCoveredBy({});
+        setOwnShares({});
         setErrors({});
       }
     } catch (e) {
@@ -259,36 +410,188 @@ export function ExpenseForm({
         </legend>
 
         {splitType === "equal" ? (
-          <div className="flex flex-wrap gap-2">
-            {members.map((m) => {
-              const on = participants.has(m.id);
-              return (
-                <button
-                  key={m.id}
-                  type="button"
-                  aria-pressed={on}
-                  onClick={() => toggleParticipant(m.id)}
-                  className={cx(
-                    "inline-flex h-10 cursor-pointer items-center gap-2 rounded-full border px-3.5 text-[14px] font-medium transition-colors duration-150",
-                    on
-                      ? "border-[var(--brand)] bg-[var(--brand-subtle)] text-[var(--brand)]"
-                      : "border-[var(--border-strong)] text-[var(--text-muted)] hover:bg-[var(--surface-subtle)]"
-                  )}
-                >
-                  <span
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap gap-2">
+              {members.map((m) => {
+                const on = participants.has(m.id);
+                const share = weights.get(m.id) ?? 0;
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => toggleParticipant(m.id)}
                     className={cx(
-                      "grid h-4 w-4 place-items-center rounded-full border",
+                      "inline-flex h-10 cursor-pointer items-center gap-2 rounded-full border px-3.5 text-[14px] font-medium transition-colors duration-150",
                       on
-                        ? "border-[var(--brand)] bg-[var(--brand)] text-[var(--on-brand)]"
-                        : "border-[var(--border-strong)]"
+                        ? "border-[var(--brand)] bg-[var(--brand-subtle)] text-[var(--brand)]"
+                        : "border-[var(--border-strong)] text-[var(--text-muted)] hover:bg-[var(--surface-subtle)]"
                     )}
                   >
-                    {on && <CheckIcon className="h-2.5 w-2.5" />}
-                  </span>
-                  {m.id === meId ? "You" : m.name}
-                </button>
-              );
-            })}
+                    <span
+                      className={cx(
+                        "grid h-4 w-4 place-items-center rounded-full border",
+                        on
+                          ? "border-[var(--brand)] bg-[var(--brand)] text-[var(--on-brand)]"
+                          : "border-[var(--border-strong)]"
+                      )}
+                    >
+                      {on && <CheckIcon className="h-2.5 w-2.5" />}
+                    </span>
+                    {m.id === meId ? "You" : m.name}
+                    {on && share !== 1 && (
+                      <span className="tnum rounded-full bg-[var(--brand)] px-1.5 text-[11px] font-semibold text-[var(--on-brand)]">
+                        &times;{share}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+
+              {/* Guests sit in the same row of pills, because on the night that
+                  is what they are: another head at the table. The dashed edge
+                  is the only thing marking that they have no account. */}
+              {guests.map((g) => {
+                const on = selectedGuests.has(g.id);
+                const sponsor = members.find((m) => m.id === g.sponsorUserId);
+                return (
+                  <button
+                    key={g.id}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => toggleGuest(g.id)}
+                    title={sponsor ? `Covered by ${sponsor.name}` : undefined}
+                    className={cx(
+                      "inline-flex h-10 cursor-pointer items-center gap-2 rounded-full border border-dashed px-3.5 text-[14px] font-medium transition-colors duration-150",
+                      on
+                        ? "border-[var(--brand)] bg-[var(--brand-subtle)] text-[var(--brand)]"
+                        : "border-[var(--border-strong)] text-[var(--text-muted)] hover:bg-[var(--surface-subtle)]"
+                    )}
+                  >
+                    <span
+                      className={cx(
+                        "grid h-4 w-4 place-items-center rounded-full border",
+                        on
+                          ? "border-[var(--brand)] bg-[var(--brand)] text-[var(--on-brand)]"
+                          : "border-[var(--border-strong)]"
+                      )}
+                    >
+                      {on && <CheckIcon className="h-2.5 w-2.5" />}
+                    </span>
+                    {g.name}
+                    <span className="text-[11px] font-normal opacity-70">
+                      guest
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* The denominator, said out loud. Covering is easy to get subtly
+                wrong, and reading "7 ways" is how you catch it before saving. */}
+            {totalShares > 0 && (
+              <p className="tnum text-[13px] text-[var(--text-muted)]">
+                Split {totalShares} way{totalShares === 1 ? "" : "s"}
+                {amountCents !== null && amountCents > 0 && (
+                  <>
+                    {" \u00b7 "}
+                    <span className="font-medium text-[var(--text)]">
+                      {formatCents(Math.round(amountCents / totalShares))}
+                    </span>{" "}
+                    per share
+                  </>
+                )}
+              </p>
+            )}
+
+            {absentSponsors.length > 0 && (
+              <p className="text-[13px] text-[var(--text-muted)]">
+                {absentSponsors
+                  .map((id) => members.find((m) => m.id === id)?.name ?? "Someone")
+                  .join(", ")}{" "}
+                {absentSponsors.length === 1 ? "is" : "are"} not in this expense
+                but still paying for a guest.
+              </p>
+            )}
+
+            {participants.size > 0 && (
+              <details className="rounded-lg border border-[var(--border)]">
+                <summary className="cursor-pointer list-none px-3 py-2 text-[13px] font-medium text-[var(--text-muted)] transition-colors duration-150 hover:text-[var(--text)]">
+                  Is anyone covering someone else?
+                </summary>
+                <div className="flex flex-col gap-2.5 border-t border-[var(--border)] p-3">
+                  {members
+                    .filter((m) => participants.has(m.id))
+                    .map((m) => {
+                      const covered = coveredBy[m.id];
+                      const own = ownShares[m.id] ?? 1;
+                      const candidates = coverCandidates(m.id);
+                      return (
+                        <div key={m.id} className="flex items-center gap-2">
+                          <Avatar
+                            name={m.name}
+                            className="h-7 w-7 shrink-0 text-[11px]"
+                          />
+                          <span className="min-w-0 flex-1 truncate text-[14px]">
+                            {m.id === meId ? "You" : m.name}
+                          </span>
+
+                          {candidates.length > 0 && (
+                            <Select
+                              aria-label={`Who pays for ${m.name}`}
+                              className="h-9 w-[170px] shrink-0 text-[13px]"
+                              value={covered ?? ""}
+                              onChange={(e) => {
+                                const value = e.target.value;
+                                setCoveredBy((prev) => {
+                                  const next = { ...prev };
+                                  if (value) next[m.id] = value;
+                                  else delete next[m.id];
+                                  return next;
+                                });
+                                if (errors.split) {
+                                  setErrors((p) => ({ ...p, split: undefined }));
+                                }
+                              }}
+                            >
+                              <option value="">Pays their own way</option>
+                              {candidates.map((c) => (
+                                <option key={c.id} value={c.id}>
+                                  Covered by {c.id === meId ? "you" : c.name}
+                                </option>
+                              ))}
+                            </Select>
+                          )}
+
+                          {/* Unnamed heads: the cousin who came along and is
+                              not worth adding to the trip as a guest. */}
+                          {!covered && (
+                            <div className="flex shrink-0 items-center">
+                              <IconButton
+                                label={`One less share for ${m.name}`}
+                                disabled={own <= 0}
+                                onClick={() => setOwnShareCount(m.id, own - 1)}
+                              >
+                                <span aria-hidden="true">&minus;</span>
+                              </IconButton>
+                              <span className="tnum w-5 text-center text-[13px] font-medium">
+                                {own}
+                              </span>
+                              <IconButton
+                                label={`One more share for ${m.name}`}
+                                disabled={own >= MAX_SHARES_PER_PERSON}
+                                onClick={() => setOwnShareCount(m.id, own + 1)}
+                              >
+                                <span aria-hidden="true">+</span>
+                              </IconButton>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                </div>
+              </details>
+            )}
           </div>
         ) : (
           <div className="flex flex-col gap-2.5">
@@ -325,25 +628,47 @@ export function ExpenseForm({
             ))}
 
             {allocated !== null && (
-              <p className="tnum mt-1 flex justify-between border-t border-[var(--border)] pt-2.5 text-[13px]">
-                <span className="text-[var(--text-muted)]">Allocated</span>
-                <span
-                  className={cx(
-                    "font-medium",
-                    splitType === "exact"
-                      ? amountCents !== null && allocated === amountCents
+              <div className="tnum mt-1 border-t border-[var(--border)] pt-2.5 text-[13px]">
+                <p className="flex justify-between">
+                  <span className="text-[var(--text-muted)]">Allocated</span>
+                  <span className="font-medium text-[var(--text)]">
+                    {splitType === "exact"
+                      ? `${formatCents(allocated)}${amountCents !== null ? ` of ${formatCents(amountCents)}` : ""}`
+                      : `${formatPercent(allocated)} of 100%`}
+                  </span>
+                </p>
+
+                {/* The number people are actually solving for while they type:
+                    what is still loose, or how far past the total they went. */}
+                {remaining !== null && (
+                  <p
+                    className={cx(
+                      "mt-1.5 flex justify-between font-semibold",
+                      remaining === 0
                         ? "text-[var(--positive)]"
-                        : "text-[var(--text)]"
-                      : Math.abs(allocated - 100) < 0.001
-                        ? "text-[var(--positive)]"
-                        : "text-[var(--text)]"
-                  )}
-                >
-                  {splitType === "exact"
-                    ? `${formatCents(allocated)}${amountCents !== null ? ` of ${formatCents(amountCents)}` : ""}`
-                    : `${allocated}% of 100%`}
-                </span>
-              </p>
+                        : remaining > 0
+                          ? "text-[var(--warning)]"
+                          : "text-[var(--negative)]"
+                    )}
+                  >
+                    <span className="inline-flex items-center gap-1.5">
+                      {remaining === 0 && <CheckIcon className="h-3 w-3 shrink-0" />}
+                      {remaining === 0
+                        ? "Fully allocated"
+                        : remaining > 0
+                          ? "Left to allocate"
+                          : "Over the total by"}
+                    </span>
+                    {remaining !== 0 && (
+                      <span>
+                        {splitType === "exact"
+                          ? formatCents(Math.abs(remaining))
+                          : formatPercent(Math.abs(remaining))}
+                      </span>
+                    )}
+                  </p>
+                )}
+              </div>
             )}
           </div>
         )}

@@ -132,11 +132,93 @@ export const expenseShares = pgTable(
       .notNull()
       .references(() => users.id),
     owedCents: integer("owed_cents").notNull(),
+    // How many shares of an equal split this row pays for: their own, plus
+    // one for every guest they sponsor and every member they cover. Stored
+    // rather than inferred, because rounding means a doubled share is not
+    // exactly twice a single one and the edit form has to round-trip.
+    // Always 1 for exact and percentage splits, where it carries no meaning.
+    shareCount: integer("share_count").notNull().default(1),
+    // Set when another member is paying this member's share. The row stays so
+    // the expense still shows they were there, owing nothing.
+    coveredBy: uuid("covered_by").references(() => users.id),
   },
   (t) => [
     unique("expense_shares_expense_user_unique").on(t.expenseId, t.userId),
     index("expense_shares_user_id_idx").on(t.userId),
     check("expense_shares_owed_non_negative_check", sql`${t.owedCents} >= 0`),
+    check(
+      "expense_shares_share_count_non_negative_check",
+      sql`${t.shareCount} >= 0`
+    ),
+    check(
+      "expense_shares_covered_not_self_check",
+      sql`${t.coveredBy} IS NULL OR ${t.coveredBy} <> ${t.userId}`
+    ),
+    // A covered member pays nothing, by definition. Enforced here so no code
+    // path can leave a row that claims to be covered and still owes money.
+    check(
+      "expense_shares_covered_pays_nothing_check",
+      sql`${t.coveredBy} IS NULL OR (${t.shareCount} = 0 AND ${t.owedCents} = 0)`
+    ),
+  ]
+);
+
+// Someone on the trip who has no Squared account. A guest never owes money
+// themselves — they have no way to pay it — so their portion of an expense is
+// folded into their sponsor's expense_shares row. That is what keeps the
+// balance engine, debt simplification and Stripe payouts untouched by this:
+// downstream, a sponsor simply owes more.
+export const groupGuests = pgTable(
+  "group_guests",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    groupId: uuid("group_id")
+      .notNull()
+      .references(() => groups.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    sponsorUserId: uuid("sponsor_user_id")
+      .notNull()
+      .references(() => users.id),
+    // Guests are archived, never deleted. Their share is already baked into
+    // the owed_cents of past expenses, and the name is the only thing that
+    // makes those rows readable a month later.
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index("group_guests_group_id_idx").on(t.groupId),
+    index("group_guests_sponsor_user_id_idx").on(t.sponsorUserId),
+  ]
+);
+
+// Which guests were counted in a given expense. Needed so editing an expense
+// round-trips, and so the expense detail can name who the extra shares were
+// for instead of showing a bare multiplier.
+export const expenseGuestShares = pgTable(
+  "expense_guest_shares",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    expenseId: uuid("expense_id")
+      .notNull()
+      .references(() => expenses.id, { onDelete: "cascade" }),
+    guestId: uuid("guest_id")
+      .notNull()
+      .references(() => groupGuests.id),
+    // Snapshot of who covered this guest when the expense was recorded. A
+    // guest's sponsor can be reassigned later; what the ledger charged then
+    // must not move with it.
+    sponsorUserId: uuid("sponsor_user_id")
+      .notNull()
+      .references(() => users.id),
+  },
+  (t) => [
+    unique("expense_guest_shares_expense_guest_unique").on(
+      t.expenseId,
+      t.guestId
+    ),
+    index("expense_guest_shares_guest_id_idx").on(t.guestId),
   ]
 );
 

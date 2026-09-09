@@ -3,14 +3,37 @@
 // No floats ever touch a stored monetary value; rounding happens once, here,
 // via largest-remainder apportionment.
 
+import {
+  resolveEqualShares,
+  type CoverageGuest,
+  type CoverageParticipant,
+} from "./coverage-rules";
+
 export class SplitError extends Error {}
 
+/** A participant given as a bare id still means exactly one share. */
+export type EqualParticipantSpec = string | CoverageParticipant;
+
 export type SplitSpec =
-  | { type: "equal"; participants: string[] }
+  | {
+      type: "equal";
+      participants: EqualParticipantSpec[];
+      guests?: CoverageGuest[];
+    }
   | { type: "exact"; shares: { userId: string; amountCents: number }[] }
   | { type: "percentage"; shares: { userId: string; percent: number }[] };
 
 export type Share = { userId: string; owedCents: number };
+
+/**
+ * A share plus the bookkeeping that lets an equal split be read back and
+ * edited later. `shareCount` is how many ways-worth this member is paying for,
+ * and `coveredBy` names the member paying instead when they are not.
+ */
+export type ShareRow = Share & {
+  shareCount: number;
+  coveredBy: string | null;
+};
 
 /**
  * Compute each participant's share of `amountCents` according to `spec`.
@@ -20,19 +43,50 @@ export type Share = { userId: string; owedCents: number };
  * order).
  */
 export function computeShares(amountCents: number, spec: SplitSpec): Share[] {
+  return computeShareRows(amountCents, spec).map(({ userId, owedCents }) => ({
+    userId,
+    owedCents,
+  }));
+}
+
+/**
+ * As computeShares, but also returning what has to be persisted for an equal
+ * split to survive a round trip through the database and back into the edit
+ * form. Same arithmetic, one call, so the two views can never disagree.
+ */
+export function computeShareRows(
+  amountCents: number,
+  spec: SplitSpec
+): ShareRow[] {
   if (!Number.isSafeInteger(amountCents) || amountCents <= 0) {
     throw new SplitError("Amount must be a positive integer number of cents");
   }
 
   switch (spec.type) {
     case "equal": {
-      const ids = spec.participants;
-      assertNonEmptyDistinct(ids);
-      // Equal split is percentage apportionment with equal weights.
-      return apportion(
-        amountCents,
-        ids.map((userId) => ({ userId, weight: 1 }))
+      const participants = spec.participants.map((p) =>
+        typeof p === "string" ? { userId: p } : p
       );
+      assertNonEmptyDistinct(participants.map((p) => p.userId));
+
+      // An equal split is apportionment by head count. Covering only changes
+      // whose head is charged to whom, so it stays the same arithmetic with
+      // weights that are no longer all 1.
+      const resolved = resolveEqualShares(participants, spec.guests ?? []);
+      const owed = apportion(
+        amountCents,
+        resolved.map(({ userId, weight }) => ({ userId, weight }))
+      );
+
+      // apportion returns input order, so these line up by index. A covered
+      // member has weight 0, and leftover cents only ever land on rows with a
+      // non-zero remainder, so they are guaranteed to come back owing 0.
+      return resolved.map((r, i) => ({
+        userId: r.userId,
+        owedCents: owed[i].owedCents,
+        shareCount: r.weight,
+        coveredBy: r.coveredBy,
+      }));
     }
 
     case "exact": {
@@ -53,6 +107,8 @@ export function computeShares(amountCents: number, spec: SplitSpec): Share[] {
       return spec.shares.map((s) => ({
         userId: s.userId,
         owedCents: s.amountCents,
+        shareCount: 1,
+        coveredBy: null,
       }));
     }
 
@@ -79,7 +135,11 @@ export function computeShares(amountCents: number, spec: SplitSpec): Share[] {
           `Percentages sum to ${totalBp / 100}, expected 100`
         );
       }
-      return apportion(amountCents, weights);
+      return apportion(amountCents, weights).map((share) => ({
+        ...share,
+        shareCount: 1,
+        coveredBy: null,
+      }));
     }
   }
 }
