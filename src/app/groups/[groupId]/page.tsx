@@ -11,6 +11,7 @@ import {
   Button,
   Card,
   CardHeader,
+  CollapsibleCard,
   ConfirmDialog,
   Dialog,
   EmptyState,
@@ -311,11 +312,20 @@ function BalancesCard({
   balances: Balances;
   meId: string;
 }) {
-  const settled = balances.balances.every((b) => b.netCents === 0);
+  const unsettled = balances.balances.filter((b) => b.netCents !== 0).length;
+  const settled = unsettled === 0;
 
   return (
-    <Card>
-      <CardHeader title="Balances" description="Net position per member." />
+    <CollapsibleCard
+      title="Balances"
+      description="Net position per member."
+      storageKey="balances"
+      summary={
+        unsettled === 0
+          ? "Everyone's square"
+          : `${unsettled} ${unsettled === 1 ? "person is" : "people are"} not square yet`
+      }
+    >
       {settled ? (
         <EmptyState
           icon={<ScalesIcon className="h-5 w-5" />}
@@ -354,7 +364,7 @@ function BalancesCard({
           ))}
         </ul>
       )}
-    </Card>
+    </CollapsibleCard>
   );
 }
 
@@ -427,13 +437,16 @@ function SettleUpCard({
   if (balances.suggestedTransfers.length === 0) return null;
 
   return (
-    <Card>
-      <CardHeader
-        title="Settle up"
-        description={`${balances.suggestedTransfers.length} transfer${
-          balances.suggestedTransfers.length === 1 ? "" : "s"
-        } clears the whole group.`}
-      />
+    <CollapsibleCard
+      title="Settle up"
+      description={`${balances.suggestedTransfers.length} transfer${
+        balances.suggestedTransfers.length === 1 ? "" : "s"
+      } clears the whole group.`}
+      storageKey="settle-up"
+      summary={`${balances.suggestedTransfers.length} transfer${
+        balances.suggestedTransfers.length === 1 ? "" : "s"
+      } would clear the group`}
+    >
       <div className="p-5">
         {error && (
           <div className="mb-4">
@@ -556,7 +569,7 @@ function SettleUpCard({
           </div>
         </div>
       </Dialog>
-    </Card>
+    </CollapsibleCard>
   );
 }
 
@@ -605,8 +618,18 @@ function ExpenseList({
 
   return (
     <>
-      <Card>
-        <CardHeader title="Expenses" description="Most recent first." />
+      <CollapsibleCard
+        title="Expenses"
+        description="Most recent first."
+        storageKey="expenses"
+        summary={
+          expenses.length === 0
+            ? "Nothing logged yet"
+            : `${expenses.length} logged \u00b7 ${formatCents(
+                expenses.reduce((sum, e) => sum + e.amountCents, 0)
+              )} tracked`
+        }
+      >
         {expenses.length === 0 ? (
           <EmptyState
             icon={<ReceiptIcon className="h-5 w-5" />}
@@ -700,7 +723,7 @@ function ExpenseList({
             })}
           </ul>
         )}
-      </Card>
+      </CollapsibleCard>
 
       <Dialog
         open={editing !== null}
@@ -778,8 +801,17 @@ function SettlementHistory({
   if (settlements.length === 0) return null;
 
   return (
-    <Card>
-      <CardHeader title="Payments" description="Settlements in this group." />
+    <CollapsibleCard
+      title="Payments"
+      description="Settlements in this group."
+      storageKey="payments"
+      defaultOpen={false}
+      summary={
+        settlements.length === 0
+          ? "Nothing paid yet"
+          : `${settlements.length} recorded`
+      }
+    >
       <ul className="divide-y divide-[var(--border)]">
         {settlements.map((s) => {
           const status = SETTLEMENT_STATUS[s.status] ?? {
@@ -815,7 +847,7 @@ function SettlementHistory({
           );
         })}
       </ul>
-    </Card>
+    </CollapsibleCard>
   );
 }
 
@@ -893,8 +925,14 @@ function MembersCard({
 
   return (
     <>
-      <Card className="h-fit">
-        <CardHeader title="Members" description="Everyone splitting costs here." />
+      <CollapsibleCard
+        className="h-fit"
+        title="Members"
+        description="Everyone splitting costs here."
+        storageKey="members"
+        defaultOpen={false}
+        summary={`${members.length} ${members.length === 1 ? "person" : "people"}`}
+      >
         <ul className="divide-y divide-[var(--border)]">
           {members.map((m) => {
             const self = m.id === meId;
@@ -973,7 +1011,7 @@ function MembersCard({
             Add member
           </Button>
         </form>
-      </Card>
+      </CollapsibleCard>
 
       <ConfirmDialog
         open={removing !== null}
@@ -1068,11 +1106,16 @@ function GuestsCard({
   }
 
   return (
-    <Card>
-      <CardHeader
-        title="Guests"
-        description="People here without an account. Their share is paid by whoever covers them."
-      />
+    <CollapsibleCard
+      title="Guests"
+      description="People here without an account. Their share is paid by whoever covers them."
+      storageKey="guests"
+      summary={
+        guests.length === 0
+          ? "None yet"
+          : guests.map((g) => g.name).join(", ")
+      }
+    >
 
       {guests.length === 0 ? (
         <EmptyState
@@ -1163,7 +1206,7 @@ function GuestsCard({
         loading={removeBusy}
         error={removeError}
       />
-    </Card>
+    </CollapsibleCard>
   );
 }
 

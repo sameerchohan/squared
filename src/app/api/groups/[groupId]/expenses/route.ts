@@ -14,7 +14,9 @@ import { resolveSplit, splitSchema } from "@/server/expense-split";
 
 const createExpenseSchema = z.object({
   description: z.string().trim().min(1).max(200),
-  amountCents: z.number().int().positive(),
+  // Same ceiling the edit route enforces, so an expense cannot be created
+  // in a shape it could never be corrected into.
+  amountCents: z.number().int().positive().max(99_999_999),
   // Defaults to the signed-in user; letting it be set supports "Alice paid
   // but Bob is logging it".
   paidBy: z.uuid().optional(),

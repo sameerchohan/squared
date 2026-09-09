@@ -129,6 +129,12 @@ export const SquaredMark = ({ className = "h-7 w-7" }: IconProps) => (
   </svg>
 );
 
+export const ChevronDownIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M6 9.5 12 15.5 18 9.5" />
+  </Svg>
+);
+
 export const PencilIcon = (p: IconProps) => (
   <Svg {...p}>
     <path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />

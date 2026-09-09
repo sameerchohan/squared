@@ -139,8 +139,12 @@ async function main() {
     // since that foreign key deliberately has no cascade.
     await db.execute(sql`DELETE FROM stripe_events`);
     await db.execute(sql`DELETE FROM settlements`);
+    await db.execute(sql`DELETE FROM expense_guest_shares`);
     await db.execute(sql`DELETE FROM expense_shares`);
     await db.execute(sql`DELETE FROM expenses`);
+    // Guests hold a reference to the member covering them, and that one does
+    // not cascade, so they have to go before the users they point at.
+    await db.execute(sql`DELETE FROM group_guests`);
     await db.execute(sql`DELETE FROM group_members`);
     await db.execute(sql`DELETE FROM groups`);
     await db.execute(sql`DELETE FROM users`);

@@ -1,7 +1,14 @@
 "use client";
 
-import { forwardRef, useCallback, useEffect, useId, useRef } from "react";
-import { AlertIcon, SpinnerIcon } from "./icons";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useSyncExternalStore,
+} from "react";
+import { AlertIcon, ChevronDownIcon, SpinnerIcon } from "./icons";
 
 /* -------------------------------------------------------------------------
    Primitives shared across every screen. Centralising them is what keeps the
@@ -107,6 +114,125 @@ export function CardHeader({
       </div>
       {action}
     </div>
+  );
+}
+
+/* Which cards a person has folded away, kept in localStorage and read through
+   useSyncExternalStore so the server render (nothing remembered) and the
+   client render (whatever this device remembers) can disagree safely. */
+const cardListeners = new Set<() => void>();
+
+function cardStorageKey(key: string) {
+  return `squared.card.${key}`;
+}
+
+function subscribeToCardState(onChange: () => void) {
+  cardListeners.add(onChange);
+  // Another tab folding the same card should be reflected here too.
+  window.addEventListener("storage", onChange);
+  return () => {
+    cardListeners.delete(onChange);
+    window.removeEventListener("storage", onChange);
+  };
+}
+
+function setCardState(key: string, open: boolean) {
+  try {
+    window.localStorage.setItem(cardStorageKey(key), open ? "open" : "closed");
+  } catch {
+    // Private mode or storage disabled. Not being able to remember the choice
+    // is not a reason to refuse to make it, so fall through and notify anyway.
+  }
+  for (const onChange of cardListeners) onChange();
+}
+
+/**
+ * A card whose body can be folded away, remembering the choice on this device.
+ *
+ * Most of this page is reference material: a payment log, a member list, the
+ * Stripe machinery you are not using today. On a phone all of it sits between
+ * you and the one thing you opened the app to do. Collapsing is per person and
+ * per device rather than saved to the group, because it is a preference about
+ * a screen, not a fact about the trip.
+ *
+ * A closed card still shows `summary`, so folding something away never costs
+ * you the number that would have made you open it.
+ */
+export function CollapsibleCard({
+  title,
+  description,
+  summary,
+  storageKey,
+  defaultOpen = true,
+  children,
+  className,
+}: {
+  title: string;
+  description?: string;
+  summary?: React.ReactNode;
+  storageKey: string;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  const bodyId = useId();
+  const remembered = useSyncExternalStore(
+    subscribeToCardState,
+    () => {
+      try {
+        return window.localStorage.getItem(cardStorageKey(storageKey));
+      } catch {
+        return null;
+      }
+    },
+    () => null
+  );
+  const open = remembered === null ? defaultOpen : remembered === "open";
+
+  return (
+    <Card className={className}>
+      <h2>
+        <button
+          type="button"
+          onClick={() => setCardState(storageKey, !open)}
+          aria-expanded={open}
+          aria-controls={bodyId}
+          className={cx(
+            // The whole header is the target. On a phone a lone chevron is a
+            // miss waiting to happen, and there is nothing else here to hit.
+            "flex w-full cursor-pointer items-center gap-3 px-5 py-4 text-left",
+            "transition-colors duration-150 hover:bg-[var(--surface-subtle)]",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-ring)]",
+            open && "border-b border-[var(--border)]"
+          )}
+        >
+          <span className="min-w-0 flex-1">
+            <span className="block text-[15px] font-semibold tracking-tight">
+              {title}
+            </span>
+            {open && description && (
+              <span className="mt-0.5 block text-[13px] font-normal text-[var(--text-muted)]">
+                {description}
+              </span>
+            )}
+            {!open && summary && (
+              <span className="mt-0.5 block truncate text-[13px] font-normal text-[var(--text-muted)]">
+                {summary}
+              </span>
+            )}
+          </span>
+          <ChevronDownIcon
+            className={cx(
+              "h-4 w-4 shrink-0 text-[var(--text-faint)] transition-transform duration-200",
+              !open && "-rotate-90"
+            )}
+          />
+        </button>
+      </h2>
+      <div id={bodyId} hidden={!open}>
+        {children}
+      </div>
+    </Card>
   );
 }
 

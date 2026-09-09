@@ -150,7 +150,7 @@ export function computeShareRows(
  * always fewer than the number of participants — to those with the largest
  * truncated remainders, earliest-listed first on ties.
  */
-function apportion(
+export function apportion(
   amountCents: number,
   weights: { userId: string; weight: number }[]
 ): Share[] {
@@ -159,13 +159,19 @@ function apportion(
     throw new SplitError("At least one share must be greater than zero");
   }
 
+  // amount x weight is computed in BigInt. Both factors are bounded by the
+  // largest expense the API accepts, and their product can exceed the range
+  // where a double still counts in whole numbers, which would round the
+  // multiplication itself before any apportionment happened. The quotient and
+  // remainder are always small enough to come back as ordinary numbers.
+  const total = BigInt(totalWeight);
   const shares = weights.map(({ userId, weight }, index) => {
-    const exact = amountCents * weight;
+    const exact = BigInt(amountCents) * BigInt(weight);
     return {
       userId,
       index,
-      owedCents: Math.floor(exact / totalWeight),
-      remainder: exact % totalWeight,
+      owedCents: Number(exact / total),
+      remainder: Number(exact % total),
     };
   });
 

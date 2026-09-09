@@ -37,6 +37,10 @@ export const splitSchema = z.discriminatedUnion("type", [
         })
       )
       .min(1),
+    // An itemised bill can include guests. Their money is already inside their
+    // sponsor's amount by the time it gets here, since a guest has no row of
+    // their own to put it in; recording them keeps the expense readable.
+    guestIds: z.array(z.uuid()).optional(),
   }),
   z.object({
     type: z.literal("percentage"),
@@ -103,8 +107,23 @@ export async function resolveSplit(
 
   const guests = await resolveGuests(
     groupId,
-    split.type === "equal" ? (split.guestIds ?? []) : []
+    split.type === "percentage" ? [] : (split.guestIds ?? [])
   );
+
+  // On an equal split the coverage rules check this while working out weights.
+  // On an exact one there are no weights to work out, so check it here rather
+  // than let a guest be recorded against somebody who is not even paying.
+  if (split.type === "exact") {
+    const paying = new Set(split.shares.map((s) => s.userId));
+    for (const guest of guests) {
+      if (!paying.has(guest.sponsorUserId)) {
+        throw new ApiError(
+          400,
+          "Whoever covers a guest must be listed in this expense"
+        );
+      }
+    }
+  }
 
   try {
     const shares = computeShareRows(
