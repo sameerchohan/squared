@@ -37,6 +37,7 @@ import {
 } from "@/components/icons";
 import { api, UnauthorizedError } from "@/lib/client";
 import type { StoredItemization } from "@/db/schema";
+import type { ScannedReceipt } from "@/lib/scanned-receipt";
 import { formatCents } from "@/lib/format";
 
 type Me = { id: string; name: string; email: string };
@@ -92,11 +93,27 @@ export default function GroupPage() {
   const [group, setGroup] = useState<Group | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
   const [guests, setGuests] = useState<Guest[]>([]);
+  const [scanEnabled, setScanEnabled] = useState(false);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [balances, setBalances] = useState<Balances | null>(null);
   const [settlements, setSettlements] = useState<Settlement[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+
+  // Only handed to the form when the feature is switched on, so the button is
+  // simply absent rather than present and failing.
+  const scanReceipt = useCallback(
+    async (photo: Blob) => {
+      const form = new FormData();
+      form.append("image", photo, "receipt.jpg");
+      const { receipt } = await api<{ receipt: ScannedReceipt }>(
+        `/api/groups/${groupId}/receipt-scan`,
+        { method: "POST", body: form }
+      );
+      return receipt;
+    },
+    [groupId]
+  );
 
   // Every mutation calls this. One fetch of all four resources keeps the
   // balances, the expense list, and the settle-up plan from ever disagreeing
@@ -109,16 +126,26 @@ export default function GroupPage() {
       api<{ user: Me }>("/api/auth/me"),
       api<{ group: Group; members: Member[] }>(`/api/groups/${groupId}`),
       api<{ guests: Guest[] }>(`/api/groups/${groupId}/guests`),
+      api<{ enabled: boolean }>(`/api/groups/${groupId}/receipt-scan`),
       api<{ expenses: Expense[] }>(`/api/groups/${groupId}/expenses`),
       api<Balances>(`/api/groups/${groupId}/balances`),
       api<{ settlements: Settlement[] }>(`/api/groups/${groupId}/settlements`),
     ])
-      .then(([meRes, detail, guestsRes, expensesRes, balancesRes, settlementsRes]) => {
+      .then(([
+        meRes,
+        detail,
+        guestsRes,
+        scanRes,
+        expensesRes,
+        balancesRes,
+        settlementsRes,
+      ]) => {
         if (cancelled) return;
         setMe(meRes.user);
         setGroup(detail.group);
         setMembers(detail.members);
         setGuests(guestsRes.guests);
+        setScanEnabled(scanRes.enabled);
         setExpenses(expensesRes.expenses);
         setBalances(balancesRes);
         setSettlements(settlementsRes.settlements);
@@ -270,12 +297,14 @@ export default function GroupPage() {
               guests={guests}
               meId={me.id}
               onChanged={reload}
+              onScanReceipt={scanEnabled ? scanReceipt : undefined}
             />
             <ExpenseList
               groupId={groupId}
               expenses={expenses}
               members={members}
               groupGuests={guests}
+              onScanReceipt={scanEnabled ? scanReceipt : undefined}
               nameOf={nameOf}
               meId={me.id}
               onChanged={reload}
@@ -586,6 +615,7 @@ function ExpenseList({
   expenses,
   members,
   groupGuests,
+  onScanReceipt,
   nameOf,
   meId,
   onChanged,
@@ -594,6 +624,7 @@ function ExpenseList({
   expenses: Expense[];
   members: Member[];
   groupGuests: Guest[];
+  onScanReceipt?: (photo: Blob) => Promise<ScannedReceipt>;
   nameOf: (id: string) => string;
   meId: string;
   onChanged: () => void;
@@ -754,6 +785,7 @@ function ExpenseList({
                 })),
             ]}
             meId={meId}
+            onScanReceipt={onScanReceipt}
             submitLabel="Save changes"
             onCancel={() => setEditing(null)}
             initial={{
@@ -1235,12 +1267,14 @@ function AddExpenseCard({
   guests,
   meId,
   onChanged,
+  onScanReceipt,
 }: {
   groupId: string;
   members: Member[];
   guests: Guest[];
   meId: string;
   onChanged: () => void;
+  onScanReceipt?: (photo: Blob) => Promise<ScannedReceipt>;
 }) {
   const [saved, setSaved] = useState<string | null>(null);
 
@@ -1257,6 +1291,7 @@ function AddExpenseCard({
         members={members}
         guests={guests}
         meId={meId}
+        onScanReceipt={onScanReceipt}
         submitLabel="Add expense"
         onSubmit={async (payload) => {
           await api(`/api/groups/${groupId}/expenses`, { method: "POST", body: payload });

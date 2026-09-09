@@ -12,6 +12,7 @@ import {
 import { CoverageError, MAX_SHARES_PER_PERSON } from "@/lib/coverage-rules";
 import { computeShareRows, SplitError, type ShareRow } from "@/lib/splits";
 import { ReceiptError, splitReceipt } from "@/lib/receipt-split";
+import { parseMoneySum } from "@/lib/format";
 import { ApiError } from "./errors";
 
 // A participant may arrive as a bare id, which still means one share. Older
@@ -63,6 +64,7 @@ export const splitSchema = z.discriminatedUnion("type", [
         z.object({
           participantId: z.uuid(),
           amountCents: z.number().int().nonnegative(),
+          entry: z.string().trim().max(60).nullish(),
         })
       )
       .min(1),
@@ -222,6 +224,16 @@ async function resolveItemized(
       throw new ApiError(400, "All participants must be group members");
     }
   }
+  // A kept expression is only ever a record of how the number was reached, so
+  // it has to still reach it. Storing one that says something else would put a
+  // figure on screen that disagrees with the split it came from.
+  for (const line of split.individual) {
+    if (line.entry == null || line.entry === "") continue;
+    if (parseMoneySum(line.entry) !== line.amountCents) {
+      throw new ApiError(400, "An amount does not match what it adds up to");
+    }
+  }
+
   for (const item of split.items) {
     for (const id of item.sharedBy) {
       if (!listed.has(id)) {
@@ -287,7 +299,11 @@ async function resolveItemized(
     amountCents: breakdown.totalCents,
     itemization: {
       version: 1,
-      individual: split.individual,
+      individual: split.individual.map((line) => ({
+        participantId: line.participantId,
+        amountCents: line.amountCents,
+        entry: line.entry || null,
+      })),
       items: split.items.map((item) => ({
         label: item.label?.trim() || null,
         amountCents: item.amountCents,

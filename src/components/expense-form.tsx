@@ -1,15 +1,24 @@
 "use client";
 
-import { useId, useMemo, useState } from "react";
+import { useId, useMemo, useRef, useState } from "react";
 import { Alert, Avatar, Button, Field, IconButton, Input, Select, cx } from "./ui";
 import {
   AlertIcon,
+  CameraIcon,
   CheckIcon,
   ChevronDownIcon,
   PlusIcon,
+  SpinnerIcon,
   TrashIcon,
 } from "./icons";
-import { formatCents, parseDollarsToCents } from "@/lib/format";
+import { prepareReceiptPhoto } from "@/lib/photo";
+import type { ScannedReceipt } from "@/lib/scanned-receipt";
+import {
+  countMoneyParts,
+  formatCents,
+  parseDollarsToCents,
+  parseMoneySum,
+} from "@/lib/format";
 import { MAX_SHARES_PER_PERSON } from "@/lib/coverage-rules";
 import { splitReceipt, type SharedItem } from "@/lib/receipt-split";
 import type { StoredItemization } from "@/db/schema";
@@ -93,10 +102,9 @@ function computeReceipt(
   tipInput: string,
   discountInput: string
 ) {
-  const parse = (raw: string | undefined) => {
-    const trimmed = (raw ?? "").trim();
-    return trimmed === "" ? 0 : parseDollarsToCents(trimmed);
-  };
+  // Every amount field takes a sum, so "15+2+7" is a perfectly good answer to
+  // what somebody had.
+  const parse = (raw: string | undefined) => parseMoneySum(raw ?? "");
 
   const tax = parse(taxInput);
   const tip = parse(tipInput);
@@ -111,16 +119,31 @@ function computeReceipt(
   for (const g of guests) sponsorOf.set(g.id, g.sponsorUserId);
 
   const individual: { userId: string; subtotalCents: number }[] = [];
+  const entries = new Map<string, string | null>();
   for (const person of [...members, ...guests]) {
-    const cents = parse(orderAmounts[person.id]);
+    const typed = (orderAmounts[person.id] ?? "").trim();
+    const cents = parse(typed);
     if (cents === null) return { valid: false as const, reason: null };
     individual.push({ userId: person.id, subtotalCents: cents });
+    // Only worth keeping when it was a sum; a lone number comes back the same
+    // either way, and storing it would just be a second copy to keep in step.
+    entries.set(person.id, countMoneyParts(typed) > 1 ? typed : null);
   }
 
   const shared: SharedItem[] = [];
+  let unclaimedCount = 0;
+  let unclaimedCents = 0;
   for (const draft of sharedDrafts) {
     const cents = parse(draft.amount);
     if (cents === null) return { valid: false as const, reason: null };
+    // A scanned line arrives belonging to nobody. That is a job still to do,
+    // not an error, so it is set aside and counted rather than failing the
+    // whole bill while somebody is halfway through claiming things.
+    if (cents > 0 && draft.sharedBy.length === 0) {
+      unclaimedCount += 1;
+      unclaimedCents += cents;
+      continue;
+    }
     shared.push({
       label: draft.label.trim() || undefined,
       amountCents: cents,
@@ -134,7 +157,12 @@ function computeReceipt(
   } catch (error) {
     return {
       valid: false as const,
-      reason: error instanceof Error ? error.message : null,
+      reason:
+        unclaimedCount > 0
+          ? "Nothing has been claimed yet. Tap an item to say whose it was."
+          : error instanceof Error
+            ? error.message
+            : null,
     };
   }
 
@@ -163,6 +191,7 @@ function computeReceipt(
       individual: individual.map((o) => ({
         participantId: o.userId,
         amountCents: o.subtotalCents,
+        entry: entries.get(o.userId) ?? null,
       })),
       items: shared.map((item) => ({
         label: item.label ?? null,
@@ -176,6 +205,8 @@ function computeReceipt(
     byPerson,
     owedByMember,
     guestIds,
+    unclaimedCount,
+    unclaimedCents,
     food: breakdown.foodCents,
     tax: breakdown.taxCents,
     tip: breakdown.tipCents,
@@ -198,6 +229,7 @@ export function ExpenseForm({
   submitLabel,
   onSubmit,
   onCancel,
+  onScanReceipt,
 }: {
   members: FormMember[];
   guests?: FormGuest[];
@@ -211,6 +243,8 @@ export function ExpenseForm({
     split: unknown;
   }) => Promise<void>;
   onCancel?: () => void;
+  /** Given when reading a photo of a receipt is available. */
+  onScanReceipt?: (photo: Blob) => Promise<ScannedReceipt>;
 }) {
   const [description, setDescription] = useState(initial?.description ?? "");
   const [amount, setAmount] = useState(
@@ -280,7 +314,9 @@ export function ExpenseForm({
     () => {
       const out: Record<string, string> = {};
       for (const line of initial?.itemization?.individual ?? []) {
-        if (line.amountCents > 0) {
+        if (line.entry) {
+          out[line.participantId] = line.entry;
+        } else if (line.amountCents > 0) {
           out[line.participantId] = centsToInput(line.amountCents);
         }
       }
@@ -291,6 +327,9 @@ export function ExpenseForm({
   // its own check, which is the only way to catch a line nobody entered.
   const [receiptTotalInput, setReceiptTotalInput] = useState("");
   const checkId = useId();
+  const [scanning, setScanning] = useState(false);
+  const [scanError, setScanError] = useState<string | null>(null);
+  const photoField = useRef<HTMLInputElement | null>(null);
   const [sharedItems, setSharedItems] = useState<SharedDraft[]>(() =>
     (initial?.itemization?.items ?? []).map((item, index) => ({
       // Positional rather than random, so restoring a saved bill does not
@@ -376,6 +415,20 @@ export function ExpenseForm({
     ]
   );
 
+  /** Items with money on them and nobody down for them yet. */
+  const unclaimed = useMemo(() => {
+    let count = 0;
+    let cents = 0;
+    for (const item of sharedItems) {
+      const amount = parseMoneySum(item.amount) ?? 0;
+      if (amount > 0 && item.sharedBy.length === 0) {
+        count += 1;
+        cents += amount;
+      }
+    }
+    return { count, cents };
+  }, [sharedItems]);
+
   const billPeople = useMemo(
     () => [
       ...members.map((m) => ({
@@ -389,6 +442,46 @@ export function ExpenseForm({
 
   function clearSplitError() {
     if (errors.split) setErrors((p) => ({ ...p, split: undefined }));
+  }
+
+  /**
+   * Drop a read receipt into the form. Everything lands unassigned, because
+   * who ordered what is the one thing a receipt does not say, and the printed
+   * total goes into the check field so the items can be measured against it
+   * straight away.
+   */
+  function applyScan(scan: ScannedReceipt) {
+    const stamp = Date.now();
+    setSharedItems((prev) => [
+      ...prev,
+      ...scan.items.map((item, index) => ({
+        id: `scan-${stamp}-${index}`,
+        label: item.label,
+        amount: centsToInput(item.amountCents),
+        sharedBy: [],
+      })),
+    ]);
+    if (scan.taxCents != null) setTaxInput(centsToInput(scan.taxCents));
+    if (scan.tipCents != null) setTipInput(centsToInput(scan.tipCents));
+    if (scan.totalCents != null) {
+      setReceiptTotalInput(centsToInput(scan.totalCents));
+    }
+    clearSplitError();
+  }
+
+  async function handlePhoto(file: File) {
+    if (!onScanReceipt) return;
+    setScanning(true);
+    setScanError(null);
+    try {
+      applyScan(await onScanReceipt(await prepareReceiptPhoto(file)));
+    } catch (e) {
+      setScanError(
+        e instanceof Error ? e.message : "Couldn't read that photo."
+      );
+    } finally {
+      setScanning(false);
+    }
   }
 
   function addSharedItem() {
@@ -423,6 +516,18 @@ export function ExpenseForm({
         ? item.sharedBy.filter((id) => id !== personId)
         : [...item.sharedBy, personId],
     });
+  }
+
+  // iOS shows a keypad with no plus on it for a decimal field, so the plus has
+  // to be something you can tap. Focus is put back afterwards, otherwise the
+  // keyboard closes between the first amount and the second.
+  const amountFields = useRef<Record<string, HTMLInputElement | null>>({});
+
+  function appendAmount(id: string) {
+    const current = orderAmounts[id] ?? "";
+    if (current.trim() === "" || current.trimEnd().endsWith("+")) return;
+    setOrderAmount(id, `${current.trimEnd()}+`);
+    amountFields.current[id]?.focus();
   }
 
   function setOrderAmount(id: string, value: string) {
@@ -527,6 +632,12 @@ export function ExpenseForm({
         // The calculation says what is wrong when it can, and it is written to
         // be read by a person, so pass it straight through.
         next.split = receipt?.reason ?? "Use numbers like 24.50, with no symbols.";
+      }
+      if (!next.split && unclaimed.count > 0) {
+        // Saving now would quietly drop this money out of the expense.
+        next.split = `${unclaimed.count} item${
+          unclaimed.count === 1 ? "" : "s"
+        } still need somebody. Tap each one to say whose it was.`;
       }
       return next;
     }
@@ -934,45 +1045,79 @@ export function ExpenseForm({
           <div className="flex flex-col gap-3">
             <p className="text-[13px] text-[var(--text-muted)]">
               Put in what each person had to themselves, and add anything the
-              group shared below. Tax, fees and tip are shared out in
-              proportion, so nobody pays them on somebody else&rsquo;s round.
+              group shared below. Several amounts are fine in one box, so
+              &ldquo;15+2+7&rdquo; adds itself up. Tax, fees and tip are shared
+              out in proportion, so nobody pays them on somebody else&rsquo;s
+              round.
             </p>
 
             <div className="flex flex-col gap-2.5">
               {members.map((m) => {
                 const owed = receipt?.valid ? receipt.owedByMember.get(m.id) : undefined;
                 return (
-                  <div key={m.id} className="flex items-center gap-2 sm:gap-3">
-                    {/* Decoration on a row this tight. The name is the thing
-                        that identifies somebody, so it gets the width. */}
-                    <span className="hidden sm:block">
-                      <Avatar
-                        name={m.name}
-                        className="h-7 w-7 shrink-0 text-[11px]"
-                      />
-                    </span>
-                    <span className="min-w-0 flex-1 truncate text-[14px]">
-                      {m.id === meId ? "You" : m.name}
-                    </span>
-                    <div className="relative w-[92px] shrink-0 sm:w-[104px]">
-                      <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[14px] text-[var(--text-faint)]">
-                        $
+                  <div key={m.id} className="flex flex-col gap-1">
+                    {/* On a phone this splits over two lines so the amount
+                        field gets the full width, which is what makes typing
+                        "15+2+7" into it bearable. */}
+                    <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3">
+                      <div className="flex min-w-0 items-center gap-2 sm:flex-1">
+                        <span className="hidden sm:block">
+                          <Avatar
+                            name={m.name}
+                            className="h-7 w-7 shrink-0 text-[11px]"
+                          />
+                        </span>
+                        <span className="min-w-0 flex-1 truncate text-[14px]">
+                          {m.id === meId ? "You" : m.name}
+                        </span>
+                        <span className="tnum shrink-0 text-[13px] font-medium sm:hidden">
+                          {owed ? formatCents(owed) : ""}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <div className="relative min-w-0 flex-1 sm:w-[132px] sm:flex-none">
+                          <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[14px] text-[var(--text-faint)]">
+                            $
+                          </span>
+                          <Input
+                            ref={(el) => {
+                              amountFields.current[m.id] = el;
+                            }}
+                            inputMode="decimal"
+                            aria-label={`What ${m.name} had`}
+                            placeholder="0.00"
+                            className="tnum h-10 pl-6 text-[16px]"
+                            value={orderAmounts[m.id] ?? ""}
+                            onChange={(e) => setOrderAmount(m.id, e.target.value)}
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          aria-label={`Add another amount for ${m.name}`}
+                          onClick={() => appendAmount(m.id)}
+                          className="grid h-10 w-10 shrink-0 cursor-pointer place-items-center rounded-lg border border-[var(--border-strong)] text-[18px] leading-none text-[var(--text-muted)] transition-colors duration-150 hover:bg-[var(--surface-subtle)] hover:text-[var(--text)]"
+                        >
+                          +
+                        </button>
+                      </div>
+
+                      {/* Their real total, tax and tip folded in. It answers
+                          "so what do I actually owe" without anybody having to
+                          scroll down to a summary. */}
+                      <span className="tnum hidden w-[72px] shrink-0 text-right text-[13px] font-medium sm:block">
+                        {owed ? formatCents(owed) : ""}
                       </span>
-                      <Input
-                        inputMode="decimal"
-                        aria-label={`What ${m.name} had`}
-                        placeholder="0.00"
-                        className="tnum h-10 pl-6 text-[16px]"
-                        value={orderAmounts[m.id] ?? ""}
-                        onChange={(e) => setOrderAmount(m.id, e.target.value)}
-                      />
                     </div>
-                    {/* Their real total, tax and tip folded in, right where
-                        they typed. It answers "so what do I actually owe"
-                        without anybody scrolling to a summary. */}
-                    <span className="tnum w-[62px] shrink-0 text-right text-[13px] font-medium sm:w-[72px]">
-                      {owed ? formatCents(owed) : ""}
-                    </span>
+
+                    {countMoneyParts(orderAmounts[m.id] ?? "") > 1 && (
+                      <p className="text-[12px] text-[var(--text-muted)]">
+                        Adds up to{" "}
+                        <span className="tnum font-medium text-[var(--text)]">
+                          {formatCents(parseMoneySum(orderAmounts[m.id] ?? "") ?? 0)}
+                        </span>
+                      </p>
+                    )}
                   </div>
                 );
               })}
@@ -980,37 +1125,70 @@ export function ExpenseForm({
               {guests.map((g) => {
                 const sponsor = members.find((m) => m.id === g.sponsorUserId);
                 return (
-                  <div key={g.id} className="flex items-center gap-2 sm:gap-3">
-                    <span className="hidden sm:block">
-                      <Avatar
-                        name={g.name}
-                        className="h-7 w-7 shrink-0 text-[11px]"
-                      />
-                    </span>
-                    <span className="min-w-0 flex-1 truncate text-[14px]">
-                      {g.name}{" "}
-                      <span className="text-[12px] text-[var(--text-muted)]">
-                        guest
+                  <div key={g.id} className="flex flex-col gap-1">
+                    <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3">
+                      <div className="flex min-w-0 items-center gap-2 sm:flex-1">
+                        <span className="hidden sm:block">
+                          <Avatar
+                            name={g.name}
+                            className="h-7 w-7 shrink-0 text-[11px]"
+                          />
+                        </span>
+                        <span className="min-w-0 flex-1 truncate text-[14px]">
+                          {g.name}{" "}
+                          <span className="text-[12px] text-[var(--text-muted)]">
+                            guest
+                          </span>
+                        </span>
+                        <span className="shrink-0 text-[12px] text-[var(--text-muted)] sm:hidden">
+                          {sponsor
+                            ? `on ${sponsor.id === meId ? "you" : sponsor.name.split(" ")[0]}`
+                            : ""}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <div className="relative min-w-0 flex-1 sm:w-[132px] sm:flex-none">
+                          <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[14px] text-[var(--text-faint)]">
+                            $
+                          </span>
+                          <Input
+                            ref={(el) => {
+                              amountFields.current[g.id] = el;
+                            }}
+                            inputMode="decimal"
+                            aria-label={`What ${g.name} had`}
+                            placeholder="0.00"
+                            className="tnum h-10 pl-6 text-[16px]"
+                            value={orderAmounts[g.id] ?? ""}
+                            onChange={(e) => setOrderAmount(g.id, e.target.value)}
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          aria-label={`Add another amount for ${g.name}`}
+                          onClick={() => appendAmount(g.id)}
+                          className="grid h-10 w-10 shrink-0 cursor-pointer place-items-center rounded-lg border border-[var(--border-strong)] text-[18px] leading-none text-[var(--text-muted)] transition-colors duration-150 hover:bg-[var(--surface-subtle)] hover:text-[var(--text)]"
+                        >
+                          +
+                        </button>
+                      </div>
+
+                      <span className="hidden w-[72px] shrink-0 truncate text-right text-[12px] text-[var(--text-muted)] sm:block">
+                        {sponsor
+                          ? `on ${sponsor.id === meId ? "you" : sponsor.name.split(" ")[0]}`
+                          : ""}
                       </span>
-                    </span>
-                    <div className="relative w-[92px] shrink-0 sm:w-[104px]">
-                      <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[14px] text-[var(--text-faint)]">
-                        $
-                      </span>
-                      <Input
-                        inputMode="decimal"
-                        aria-label={`What ${g.name} had`}
-                        placeholder="0.00"
-                        className="tnum h-10 pl-6 text-[16px]"
-                        value={orderAmounts[g.id] ?? ""}
-                        onChange={(e) => setOrderAmount(g.id, e.target.value)}
-                      />
                     </div>
-                    <span className="w-[62px] shrink-0 truncate text-right text-[12px] text-[var(--text-muted)] sm:w-[72px]">
-                      {sponsor
-                        ? `on ${sponsor.id === meId ? "you" : sponsor.name.split(" ")[0]}`
-                        : ""}
-                    </span>
+
+                    {countMoneyParts(orderAmounts[g.id] ?? "") > 1 && (
+                      <p className="text-[12px] text-[var(--text-muted)]">
+                        Adds up to{" "}
+                        <span className="tnum font-medium text-[var(--text)]">
+                          {formatCents(parseMoneySum(orderAmounts[g.id] ?? "") ?? 0)}
+                        </span>
+                      </p>
+                    )}
                   </div>
                 );
               })}
@@ -1024,6 +1202,36 @@ export function ExpenseForm({
             <div className="flex flex-col gap-2 border-t border-[var(--border)] pt-3">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-[13px] font-medium">Items</span>
+                <div className="flex items-center gap-1.5">
+                {onScanReceipt && (
+                  <>
+                    <input
+                      ref={photoField}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        // Cleared so picking the same photo twice still fires.
+                        e.target.value = "";
+                        if (file) void handlePhoto(file);
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => photoField.current?.click()}
+                      disabled={scanning}
+                      className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-lg border border-[var(--border-strong)] px-2.5 text-[13px] font-medium text-[var(--text-muted)] transition-colors duration-150 hover:bg-[var(--surface-subtle)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {scanning ? (
+                        <SpinnerIcon className="h-3.5 w-3.5" />
+                      ) : (
+                        <CameraIcon className="h-3.5 w-3.5" />
+                      )}
+                      {scanning ? "Reading" : "Scan"}
+                    </button>
+                  </>
+                )}
                 <button
                   type="button"
                   onClick={addSharedItem}
@@ -1032,7 +1240,15 @@ export function ExpenseForm({
                   <PlusIcon className="h-3.5 w-3.5" />
                   Add
                 </button>
+                </div>
               </div>
+
+              {scanError && (
+                <p className="flex items-start gap-1.5 text-[12px] text-[var(--negative)]">
+                  <AlertIcon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  {scanError}
+                </p>
+              )}
 
               {sharedItems.length === 0 ? (
                 <p className="text-[12px] text-[var(--text-muted)]">
@@ -1156,6 +1372,15 @@ export function ExpenseForm({
                     </div>
                   );
                 })
+              )}
+
+              {unclaimed.count > 0 && (
+                <p className="flex items-center gap-1.5 text-[12px] font-medium text-[var(--warning)]">
+                  <AlertIcon className="h-3.5 w-3.5 shrink-0" />
+                  {unclaimed.count} item{unclaimed.count === 1 ? "" : "s"} still
+                  need somebody{" "}
+                  <span className="tnum">({formatCents(unclaimed.cents)})</span>
+                </p>
               )}
             </div>
 

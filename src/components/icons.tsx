@@ -129,6 +129,13 @@ export const SquaredMark = ({ className = "h-7 w-7" }: IconProps) => (
   </svg>
 );
 
+export const CameraIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M3 8.5A1.5 1.5 0 0 1 4.5 7h2.2a1 1 0 0 0 .83-.45l.94-1.4A1 1 0 0 1 9.3 4.7h5.4a1 1 0 0 1 .83.45l.94 1.4a1 1 0 0 0 .83.45h2.2A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z" />
+    <circle cx="12" cy="12.8" r="3.2" />
+  </Svg>
+);
+
 export const ChevronDownIcon = (p: IconProps) => (
   <Svg {...p}>
     <path d="M6 9.5 12 15.5 18 9.5" />

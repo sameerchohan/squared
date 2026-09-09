@@ -111,8 +111,16 @@ export const groupMembers = pgTable(
  */
 export type StoredItemization = {
   version: 1;
-  /** Keyed by user id or guest id. */
-  individual: { participantId: string; amountCents: number }[];
+  /**
+   * Keyed by user id or guest id. `entry` keeps the amounts as they were
+   * actually typed when somebody entered several at once ("15+2+7"), so
+   * correcting one of them later does not mean working the sum out again.
+   */
+  individual: {
+    participantId: string;
+    amountCents: number;
+    entry?: string | null;
+  }[];
   items: { label: string | null; amountCents: number; sharedBy: string[] }[];
   taxCents: number;
   tipCents: number;
