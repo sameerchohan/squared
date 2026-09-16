@@ -1,7 +1,14 @@
 "use client";
 
-import { forwardRef, useCallback, useEffect, useId, useRef } from "react";
-import { AlertIcon, SpinnerIcon } from "./icons";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useSyncExternalStore,
+} from "react";
+import { AlertIcon, SpinnerIcon, XIcon } from "./icons";
 
 /* -------------------------------------------------------------------------
    Primitives shared across every screen. Centralising them is what keeps the
@@ -310,7 +317,97 @@ export function Avatar({ name, className }: { name: string; className?: string }
    Escape closes it, the scrim closes it, focus moves inside on open and
    returns to the trigger on close, and Tab cycles within — a modal that
    leaks focus to the page behind it is unusable with a keyboard.
+
+   On a phone the hard part isn't any of that, it's staying on screen; the
+   two hooks below are what make that true.
 ------------------------------------------------------------------------- */
+
+/**
+ * The frame the user can actually see.
+ *
+ * `inset-0` and `100vh` describe the *layout* viewport, which on mobile
+ * includes the strip behind the browser's URL bar and does not shrink when
+ * the on-screen keyboard opens. A dialog sized to it puts its lower half —
+ * in a form, its Save button — somewhere the user cannot reach: the overlay
+ * scrolls its own content, and the page behind is locked, so there is
+ * nothing left to scroll. The visual viewport is the part that is really
+ * visible, and it reports both its height and how far it has been pushed
+ * down, so the overlay can track it exactly.
+ */
+function useVisualViewportFrame(open: boolean) {
+  // While closed, nothing is subscribed: visualViewport's scroll event fires
+  // continuously as the page moves, and a dialog that isn't on screen has no
+  // business re-rendering on every one of them.
+  const subscribe = useCallback(
+    (onChange: () => void) => {
+      const viewport = window.visualViewport;
+      if (!open || !viewport) return () => {};
+      viewport.addEventListener("resize", onChange);
+      viewport.addEventListener("scroll", onChange);
+      return () => {
+        viewport.removeEventListener("resize", onChange);
+        viewport.removeEventListener("scroll", onChange);
+      };
+    },
+    [open]
+  );
+
+  // The snapshot is a string rather than an object because
+  // useSyncExternalStore compares snapshots with Object.is, and a fresh
+  // object on every read would re-render forever.
+  const getSnapshot = useCallback(() => {
+    const viewport = window.visualViewport;
+    if (!open || !viewport) return "";
+    return `${viewport.offsetTop}:${viewport.height}`;
+  }, [open]);
+
+  // Read during render rather than after it, so the panel's first painted
+  // frame is already the right size — on a phone the difference is the sheet
+  // visibly resizing as it opens.
+  const snapshot = useSyncExternalStore(subscribe, getSnapshot, () => "");
+  if (!snapshot) return null;
+
+  const [top, height] = snapshot.split(":").map(Number);
+  return { top, height };
+}
+
+/**
+ * Holds the page still behind the dialog.
+ *
+ * `overflow: hidden` on the body is enough on a desktop browser and is
+ * ignored by iOS Safari, which keeps scrolling the page and drags the fixed
+ * overlay along with it. Pinning the body at its current offset does work;
+ * restoring the offset afterwards is what stops the page jumping to the top
+ * when the dialog closes.
+ */
+function useBodyScrollLock(open: boolean) {
+  useEffect(() => {
+    if (!open) return;
+    const { body } = document;
+    const scrollY = window.scrollY;
+    const previous = {
+      position: body.style.position,
+      top: body.style.top,
+      left: body.style.left,
+      right: body.style.right,
+      width: body.style.width,
+      overflow: body.style.overflow,
+    };
+
+    body.style.position = "fixed";
+    body.style.top = `-${scrollY}px`;
+    body.style.left = "0";
+    body.style.right = "0";
+    body.style.width = "100%";
+    body.style.overflow = "hidden";
+
+    return () => {
+      Object.assign(body.style, previous);
+      window.scrollTo(0, scrollY);
+    };
+  }, [open]);
+}
+
 export function Dialog({
   open,
   onClose,
@@ -325,9 +422,13 @@ export function Dialog({
   children: React.ReactNode;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
   const restoreRef = useRef<HTMLElement | null>(null);
   const titleId = useId();
   const descId = useId();
+
+  const frame = useVisualViewportFrame(open);
+  useBodyScrollLock(open);
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent) => {
@@ -338,16 +439,27 @@ export function Dialog({
       }
       if (event.key !== "Tab" || !panelRef.current) return;
 
-      const focusable = panelRef.current.querySelectorAll<HTMLElement>(
-        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      const focusable = Array.from(
+        panelRef.current.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        )
       );
       if (focusable.length === 0) return;
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
+      const active = document.activeElement as HTMLElement | null;
+
+      // Focus starts on the panel itself, which is not in the list. Without
+      // this, Shift+Tab from there would walk backwards out of the dialog.
+      if (!active || focusable.indexOf(active) === -1) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+        return;
+      }
+      if (event.shiftKey && active === first) {
         event.preventDefault();
         last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
+      } else if (!event.shiftKey && active === last) {
         event.preventDefault();
         first.focus();
       }
@@ -359,55 +471,110 @@ export function Dialog({
     if (!open) return;
     restoreRef.current = document.activeElement as HTMLElement | null;
     document.addEventListener("keydown", handleKeyDown);
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
 
-    const timer = window.setTimeout(() => {
-      panelRef.current
-        ?.querySelector<HTMLElement>(
-          'input:not([disabled]), button:not([disabled]), select:not([disabled])'
-        )
-        ?.focus();
-    }, 20);
+    // The panel takes focus rather than the first input. Focusing an input
+    // would open the on-screen keyboard the instant the dialog appears,
+    // which halves the visible area before the user has read the title —
+    // and it is the dialog, not one of its fields, that a screen reader
+    // should announce first.
+    const timer = window.setTimeout(() => panelRef.current?.focus(), 20);
 
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
-      document.body.style.overflow = previousOverflow;
       window.clearTimeout(timer);
       restoreRef.current?.focus?.();
     };
   }, [open, handleKeyDown]);
 
+  // When the keyboard opens it shrinks the frame under whatever the user just
+  // tapped. Following the focused field keeps it in sight instead of leaving
+  // the user typing into a field hidden behind the keys.
+  //
+  // Only on a shrink, and only on the height rather than the frame object:
+  // the frame changes identity on every render and its offset changes
+  // throughout a scroll, and scrolling the field back into view on either of
+  // those would fight the user for control of the panel.
+  const previousHeightRef = useRef<number | null>(null);
+  const frameHeight = frame?.height ?? null;
+
+  useEffect(() => {
+    if (!open) {
+      previousHeightRef.current = null;
+      return;
+    }
+    const previous = previousHeightRef.current;
+    previousHeightRef.current = frameHeight;
+    if (previous === null || frameHeight === null || frameHeight >= previous) {
+      return;
+    }
+
+    const active = document.activeElement as HTMLElement | null;
+    if (active && bodyRef.current?.contains(active)) {
+      active.scrollIntoView({ block: "nearest" });
+    }
+  }, [open, frameHeight]);
+
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 sm:items-center">
+    <div
+      className="fixed inset-x-0 z-50 flex justify-center"
+      // Pinned to the visible frame, not the layout viewport, so nothing can
+      // come to rest under the browser chrome or behind the keyboard. The
+      // dvh fallback covers browsers without a visualViewport.
+      style={
+        frame ? { top: frame.top, height: frame.height } : { top: 0, height: "100dvh" }
+      }
+    >
       {/* The scrim is dark enough to isolate the panel rather than merely
           tint the page behind it. */}
       <div
-        className="fixed inset-0 bg-[#100f0c]/55 backdrop-blur-[2px]"
+        className="absolute inset-0 bg-[#100f0c]/55 backdrop-blur-[2px]"
         onClick={onClose}
         aria-hidden="true"
       />
-      <div
-        ref={panelRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        aria-describedby={description ? descId : undefined}
-        className="animate-in relative z-10 w-full max-w-lg rounded-xl border border-[var(--border)] bg-[var(--surface)] shadow-[var(--shadow-lg)]"
-      >
-        <div className="border-b border-[var(--border)] px-5 py-4">
-          <h2 id={titleId} className="text-[16px] font-semibold tracking-tight">
-            {title}
-          </h2>
-          {description && (
-            <p id={descId} className="mt-0.5 text-[13px] text-[var(--text-muted)]">
-              {description}
-            </p>
-          )}
+
+      {/* A sheet rising from the bottom edge on a phone, a centred panel from
+          sm up. Either way it is capped at the frame's height, so the panel
+          itself never overflows — only its body scrolls. */}
+      <div className="relative z-10 flex h-full w-full items-end justify-center sm:items-center sm:p-4">
+        <div
+          ref={panelRef}
+          role="dialog"
+          aria-modal="true"
+          tabIndex={-1}
+          aria-labelledby={titleId}
+          aria-describedby={description ? descId : undefined}
+          className="dialog-panel flex max-h-full w-full flex-col overflow-hidden rounded-t-2xl border border-[var(--border)] bg-[var(--surface)] shadow-[var(--shadow-lg)] outline-none sm:max-w-lg sm:rounded-xl"
+        >
+          <div className="flex shrink-0 items-start justify-between gap-3 border-b border-[var(--border)] px-5 py-4">
+            <div className="min-w-0">
+              <h2 id={titleId} className="text-[16px] font-semibold tracking-tight">
+                {title}
+              </h2>
+              {description && (
+                <p id={descId} className="mt-0.5 text-[13px] text-[var(--text-muted)]">
+                  {description}
+                </p>
+              )}
+            </div>
+            {/* A full-height sheet leaves almost no scrim to tap, so the way
+                out has to be inside the dialog. */}
+            <IconButton label="Close" onClick={onClose} className="-mr-1.5 shrink-0">
+              <XIcon className="h-4 w-4" />
+            </IconButton>
+          </div>
+
+          {/* The scrolling region. overscroll-contain stops a flick at the end
+              of this list from scrolling the page underneath. The safe-area
+              padding clears the home indicator on a phone. */}
+          <div
+            ref={bodyRef}
+            className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-[env(safe-area-inset-bottom,0px)]"
+          >
+            {children}
+          </div>
         </div>
-        {children}
       </div>
     </div>
   );

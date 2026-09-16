@@ -146,6 +146,43 @@ body {
   animation: fade-rise 200ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
+/* A dialog arrives from the edge it is anchored to: a sheet rising off the
+   bottom of a phone, a panel settling into the middle of a larger screen.
+   The transform is gone by the last frame, so the finished panel never acts
+   as a containing block for anything positioned inside it. */
+@keyframes sheet-rise {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes panel-settle {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.dialog-panel {
+  animation: sheet-rise 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* Matches the `sm` breakpoint, where the sheet becomes a centred panel. */
+@media (min-width: 40rem) {
+  .dialog-panel {
+    animation-name: panel-settle;
+  }
+}
+
 /* A barely-there hairline grid over the masthead. At 4% opacity it reads as
    ledger paper rather than decoration — the eye registers texture without
    resolving the lines. */
