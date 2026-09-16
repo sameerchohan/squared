@@ -37,8 +37,9 @@ import {
 } from "@/components/icons";
 import { api, UnauthorizedError } from "@/lib/client";
 import type { StoredItemization } from "@/db/schema";
-import type { ScannedReceipt } from "@/lib/scanned-receipt";
+import { canModifyExpense } from "@/lib/expense-rules";
 import { formatCents } from "@/lib/format";
+import type { ScannedReceipt } from "@/lib/scanned-receipt";
 
 type Me = { id: string; name: string; email: string };
 type Member = {
@@ -307,6 +308,7 @@ export default function GroupPage() {
               onScanReceipt={scanEnabled ? scanReceipt : undefined}
               nameOf={nameOf}
               meId={me.id}
+              createdBy={group.createdBy}
               onChanged={reload}
             />
             <SettlementHistory settlements={settlements} nameOf={nameOf} meId={me.id} />
@@ -618,6 +620,7 @@ function ExpenseList({
   onScanReceipt,
   nameOf,
   meId,
+  createdBy,
   onChanged,
 }: {
   groupId: string;
@@ -627,6 +630,7 @@ function ExpenseList({
   onScanReceipt?: (photo: Blob) => Promise<ScannedReceipt>;
   nameOf: (id: string) => string;
   meId: string;
+  createdBy: string;
   onChanged: () => void;
 }) {
   const [editing, setEditing] = useState<Expense | null>(null);
@@ -673,6 +677,13 @@ function ExpenseList({
           <ul className="divide-y divide-[var(--border)]">
             {expenses.map((expense) => {
               const mine = expense.paidBy === meId;
+              // Same rule the API enforces, so a row never offers an action
+              // the server would refuse.
+              const canModify = canModifyExpense({
+                actorId: meId,
+                expensePaidBy: expense.paidBy,
+                groupCreatedBy: createdBy,
+              }).ok;
               return (
                 <li key={expense.id} className="group/row px-5 py-4">
                   {/* The description wraps rather than truncating: on a
@@ -701,18 +712,27 @@ function ExpenseList({
                         day: "numeric",
                       })}
                     </time>
-                    {/* Actions belong to whoever paid, and sit at the end of
-                        the meta line so they never eat the description's
-                        width. On a pointer device they stay hidden until the
-                        row is hovered or focused; on a touch screen, where
-                        neither happens, they are always visible. */}
-                    {mine && (
+                    {/* Actions belong to whoever paid, and to the group's
+                        owner, and sit at the end of the meta line so they
+                        never eat the description's width. On a pointer
+                        device they stay hidden until the row is hovered or
+                        focused; on a touch screen, where neither happens,
+                        they are always visible. */}
+                    {canModify && (
                       <div className="-my-2 ml-auto flex shrink-0 gap-0.5 transition-opacity duration-150 focus-within:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/row:opacity-100">
-                        <IconButton label="Edit expense" onClick={() => setEditing(expense)}>
+                        <IconButton
+                          label={mine ? "Edit expense" : `Edit ${nameOf(expense.paidBy)}'s expense`}
+                          onClick={() => setEditing(expense)}
+                        >
+
                           <PencilIcon className="h-4 w-4" />
                         </IconButton>
                         <IconButton
-                          label="Delete expense"
+                          label={
+                            mine
+                              ? "Delete expense"
+                              : `Delete ${nameOf(expense.paidBy)}'s expense`
+                          }
                           onClick={() => setDeleting(expense)}
                           className="hover:text-[var(--negative)]"
                         >
@@ -766,7 +786,11 @@ function ExpenseList({
         open={editing !== null}
         onClose={() => setEditing(null)}
         title="Edit expense"
-        description="Shares are recalculated and balances update on save."
+        description={
+          editing && editing.paidBy !== meId
+            ? `Paid by ${nameOf(editing.paidBy)}. Shares are recalculated and balances update on save.`
+            : "Shares are recalculated and balances update on save."
+        }
       >
         {editing && (
           <ExpenseForm
@@ -819,7 +843,12 @@ function ExpenseList({
         title="Delete this expense?"
         body={
           deleting
-            ? `"${deleting.description}" for ${formatCents(deleting.amountCents)} will be removed and everyone's balance recalculated. This can't be undone.`
+            ? `"${deleting.description}" for ${formatCents(deleting.amountCents)}${
+                // An owner deleting someone else's record is told whose it is:
+                // the name is the detail that makes the confirmation mean
+                // something.
+                deleting.paidBy === meId ? "" : `, paid by ${nameOf(deleting.paidBy)},`
+              } will be removed and everyone's balance recalculated. This can't be undone.`
             : ""
         }
         confirmLabel="Delete expense"

@@ -60,19 +60,29 @@ export default function LoginPage() {
               )}
             </Field>
 
-            <Field label="Password" required>
-              {({ id, invalid }) => (
-                <Input
-                  id={id}
-                  type="password"
-                  autoComplete="current-password"
-                  placeholder="••••••••"
-                  value={password}
-                  invalid={invalid}
-                  onChange={(e) => setPassword(e.target.value)}
-                />
-              )}
-            </Field>
+            <div className="flex flex-col gap-1.5">
+              <Field label="Password" required>
+                {({ id, invalid }) => (
+                  <Input
+                    id={id}
+                    type="password"
+                    autoComplete="current-password"
+                    placeholder="••••••••"
+                    value={password}
+                    invalid={invalid}
+                    onChange={(e) => setPassword(e.target.value)}
+                  />
+                )}
+              </Field>
+              {/* Offered next to the field that failed, where someone who
+                  can't get in is already looking. */}
+              <Link
+                href="/forgot-password"
+                className="self-start rounded-md text-[13px] font-medium text-[var(--brand)] underline-offset-4 hover:underline"
+              >
+                Forgot your password?
+              </Link>
+            </div>
 
             <Button type="submit" loading={submitting} className="mt-1 w-full">
               Sign in
