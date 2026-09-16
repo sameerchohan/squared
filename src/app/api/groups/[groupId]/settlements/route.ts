@@ -8,7 +8,8 @@ import { requireUserId } from "@/server/auth";
 import { requireGroupMember } from "@/server/authz";
 import { apiHandler, ApiError } from "@/server/errors";
 import { enforceRateLimit } from "@/server/rate-limit";
-import { appUrl, getStripe } from "@/server/stripe";
+import { appUrl } from "@/server/config";
+import { getStripe } from "@/server/stripe";
 
 const createSettlementSchema = z.object({
   toUser: z.uuid(),

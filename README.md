@@ -111,6 +111,16 @@ A Connect account isn't binary. It has capabilities that Stripe enables independ
 
 [`stripe-status.ts`](src/lib/stripe-status.ts) reduces the account to `not_started → pending → active/restricted`, driven by `account.updated` webhooks. The subtle case: **a brand-new account has every capability disabled**, so checking capabilities first labels every user who just started onboarding as "restricted." `details_submitted` has to be consulted before drawing that conclusion. Only `active` users can receive settlements, and the UI says which person isn't ready rather than presenting a button that fails.
 
+### 5. Single-use password resets without a table to store them in
+
+A reset token has to work once and then stop working. The usual way to promise that is a `password_reset_tokens` row, written on request, read on use, marked spent, and swept afterwards.
+
+[`password-reset.ts`](src/server/password-reset.ts) gets the same guarantee from the data already on hand: the token is a one-hour JWT signed with a key derived from the user's **current password hash**. Completing a reset writes a new hash, which changes the derived key, which invalidates every token ever issued for that account — the one just spent, and any older link still sitting in a mailbox. Changing a password the ordinary way invalidates them too, for free. bcrypt hashes embed a per-user salt, so a token minted for one account cannot be replayed against another even if the two share a password.
+
+The signature can't be checked before knowing whose hash to check it with, so the subject is read unverified first to select the candidate row — and rejected there unless it is a well-formed uuid, because handing a malformed one to Postgres turns a bad link into a 500 rather than a 400.
+
+What this gives up is early revocation: a token cannot be cancelled before it expires. An hour is short enough that a table is not worth the migration.
+
 ---
 
 ## Running locally
@@ -132,7 +142,7 @@ node scripts/seed.mjs --reset    # sign in as maya@squared.demo / demo1234
 ```
 
 ```bash
-npm test                    # 59 Vitest cases
+npm test                    # 72 Vitest cases
 npm run db:generate         # regenerate migrations after editing src/db/schema.ts
 docker build -t squared .   # production image (311 MB, non-root)
 ```
@@ -144,6 +154,8 @@ stripe listen --forward-to localhost:3000/api/stripe/webhook
 ```
 
 Use card `4242 4242 4242 4242` at checkout. Both parties need to complete Express onboarding before a settlement between them is allowed.
+
+Password reset emails go through [Resend](https://resend.com), configured with `RESEND_API_KEY` and `EMAIL_FROM`. Leave both unset locally: the reset link is written to the server log instead of being sent, which is enough to walk through the whole flow without a verified sending domain.
 
 ## Deploying
 

@@ -4,7 +4,8 @@ import { users } from "@/db/schema";
 import { requireUserId } from "@/server/auth";
 import { apiHandler, ApiError } from "@/server/errors";
 import { clientIp, enforceRateLimit } from "@/server/rate-limit";
-import { appUrl, getStripe } from "@/server/stripe";
+import { appUrl } from "@/server/config";
+import { getStripe } from "@/server/stripe";
 
 /**
  * Starts (or resumes) Stripe Connect onboarding: creates the Express account

@@ -1,7 +1,8 @@
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { expenses, expenseShares, groupMembers } from "@/db/schema";
+import { expenses, expenseShares, groupMembers, groups } from "@/db/schema";
+import { canModifyExpense } from "@/lib/expense-rules";
 import { computeShares } from "@/lib/splits";
 import { requireUserId } from "@/server/auth";
 import { requireGroupMember } from "@/server/authz";
@@ -31,9 +32,13 @@ const updateSchema = z.object({
 });
 
 /**
- * Only the payer may change or remove an expense. Letting any member edit
- * would mean a debtor could quietly erase what they owe; tying the record to
- * whoever actually spent the money keeps the ledger honest.
+ * Loads an expense the caller is allowed to change. The permission rule
+ * itself lives in canModifyExpense so it is unit-testable and so the UI can
+ * apply exactly the same test when deciding which rows get edit controls.
+ *
+ * The group is joined rather than fetched separately: the owner check needs
+ * groups.created_by, and one query keeps the authorization decision from
+ * being made against two reads that could disagree.
  */
 async function loadEditableExpense(
   userId: string,
@@ -42,22 +47,26 @@ async function loadEditableExpense(
 ) {
   await requireGroupMember(userId, groupId);
 
-  const [expense] = await db
-    .select()
+  const [row] = await db
+    .select({ expense: expenses, groupCreatedBy: groups.createdBy })
     .from(expenses)
+    .innerJoin(groups, eq(groups.id, expenses.groupId))
     .where(and(eq(expenses.id, expenseId), eq(expenses.groupId, groupId)))
     .limit(1);
 
-  if (!expense) {
+  if (!row) {
     throw new ApiError(404, "Expense not found");
   }
-  if (expense.paidBy !== userId) {
-    throw new ApiError(
-      403,
-      "Only the person who paid can change or delete this expense."
-    );
+
+  const allowed = canModifyExpense({
+    actorId: userId,
+    expensePaidBy: row.expense.paidBy,
+    groupCreatedBy: row.groupCreatedBy,
+  });
+  if (!allowed.ok) {
+    throw new ApiError(403, allowed.reason);
   }
-  return expense;
+  return row.expense;
 }
 
 export const PATCH = apiHandler(
