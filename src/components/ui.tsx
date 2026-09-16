@@ -436,12 +436,22 @@ export function Avatar({ name, className }: { name: string; className?: string }
 /* -------------------------------------------------------------------------
    Dialog
 
-   Escape closes it, the scrim closes it, focus moves inside on open and
-   returns to the trigger on close, and Tab cycles within — a modal that
-   leaks focus to the page behind it is unusable with a keyboard.
+   Escape closes it, clicking outside the panel closes it, focus moves
+   inside on open and returns to the trigger on close, and Tab cycles within
+   — a modal that leaks focus to the page behind it is unusable with a
+   keyboard.
 
-   On a phone the hard part isn't any of that, it's staying on screen; the
-   two hooks below are what make that true.
+   The panel is never height-constrained and never has its own inner scroll
+   region. Everything — header, fields, Save and Cancel — lives in exactly
+   one scrolling container, the full-screen overlay itself. That is a
+   deliberate reaction to two real bugs this dialog shipped with: a
+   percentage-height chain that could resolve to zero in an unusual
+   rendering context, and `align-items: center` on an overflowing flex
+   child, which clips the end that overflows first rather than making it
+   reachable by scrolling. One container, sized in plain CSS with nothing
+   for either of those to happen to, can't fail either way — however tall
+   the form gets, you reach the rest of it exactly the way you'd scroll a
+   page: wheel, trackpad, touch drag, Page Down, all of it.
 ------------------------------------------------------------------------- */
 
 /**
@@ -555,7 +565,6 @@ export function Dialog({
   children: React.ReactNode;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
-  const bodyRef = useRef<HTMLDivElement>(null);
   const restoreRef = useRef<HTMLElement | null>(null);
   const titleId = useId();
   const descId = useId();
@@ -642,7 +651,7 @@ export function Dialog({
     }
 
     const active = document.activeElement as HTMLElement | null;
-    if (active && bodyRef.current?.contains(active)) {
+    if (active && panelRef.current?.contains(active)) {
       active.scrollIntoView({ block: "nearest" });
     }
   }, [open, frameHeight]);
@@ -651,62 +660,68 @@ export function Dialog({
 
   return (
     <div
-      // 100dvh rather than inset-0's default (the *large* viewport, which
-      // includes the space behind a collapsed mobile URL bar): plain CSS,
-      // resolved by the browser's own layout, so it can't collapse the way
-      // a JS-computed value can in an environment where visualViewport
-      // behaves unexpectedly.
-      className="fixed inset-x-0 top-0 z-50 flex h-[100dvh] justify-center"
+      // The overlay is the scrim, the scroll container, and the click-outside
+      // target, all in one element rather than three layered ones — which is
+      // what makes "click outside the panel to close" actually work: a
+      // separate scrim sitting *under* a full-screen positioning wrapper
+      // never receives the click, because the wrapper — even where it's
+      // visually empty — is what's on top and catches it first.
+      //
+      // h-[100dvh] rather than inset-0's default (the *large* viewport,
+      // which includes the space behind a collapsed mobile URL bar): plain
+      // CSS, resolved by the browser's own layout, so it can't collapse the
+      // way a JS-computed value can in an environment where visualViewport
+      // behaves unexpectedly. overflow-y-auto on this same fixed-size box is
+      // the dialog's one and only scroll region.
+      className="fixed inset-x-0 top-0 z-50 flex h-[100dvh] justify-center overflow-y-auto overscroll-contain bg-[#100f0c]/55 backdrop-blur-[2px] sm:px-4 sm:py-10"
+      onClick={onClose}
     >
-      {/* The scrim is dark enough to isolate the panel rather than merely
-          tint the page behind it. */}
+      {/* A sheet rising from the bottom edge on a phone, a centred panel
+          from sm up — in both cases via auto margins on the panel itself,
+          never align-items: center. Centering a flex item with align-items
+          clips whichever end overflows first when the item is taller than
+          its container; an auto margin simply resolves to zero once there's
+          no space left to give it, so the panel always settles flush against
+          the top of the scrollable area instead, with nothing hidden. */}
       <div
-        className="absolute inset-0 bg-[#100f0c]/55 backdrop-blur-[2px]"
-        onClick={onClose}
-        aria-hidden="true"
-      />
-
-      {/* A sheet rising from the bottom edge on a phone, a centred panel from
-          sm up. Either way it is capped at this wrapper's height (100dvh),
-          so the panel itself never overflows — only its body scrolls. */}
-      <div className="relative z-10 flex h-full w-full items-end justify-center sm:items-center sm:p-4">
-        <div
-          ref={panelRef}
-          role="dialog"
-          aria-modal="true"
-          tabIndex={-1}
-          aria-labelledby={titleId}
-          aria-describedby={description ? descId : undefined}
-          className="dialog-panel flex max-h-full w-full flex-col overflow-hidden rounded-t-2xl border border-[var(--border)] bg-[var(--surface)] shadow-[var(--shadow-lg)] outline-none sm:max-w-lg sm:rounded-xl"
-        >
-          <div className="flex shrink-0 items-start justify-between gap-3 border-b border-[var(--border)] px-5 py-4">
-            <div className="min-w-0">
-              <h2 id={titleId} className="text-[16px] font-semibold tracking-tight">
-                {title}
-              </h2>
-              {description && (
-                <p id={descId} className="mt-0.5 text-[13px] text-[var(--text-muted)]">
-                  {description}
-                </p>
-              )}
-            </div>
-            {/* A full-height sheet leaves almost no scrim to tap, so the way
-                out has to be inside the dialog. */}
-            <IconButton label="Close" onClick={onClose} className="-mr-1.5 shrink-0">
-              <XIcon className="h-4 w-4" />
-            </IconButton>
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        tabIndex={-1}
+        aria-labelledby={titleId}
+        aria-describedby={description ? descId : undefined}
+        // Stops a click anywhere inside the panel from bubbling up to the
+        // overlay's own onClose — without this, using the dialog would
+        // close it.
+        onClick={(event) => event.stopPropagation()}
+        // The safe-area padding lives here, on the panel's own content, not
+        // on the outer container: the panel's rounded-top sheet is meant to
+        // sit flush against the true bottom edge on a phone, and pushing the
+        // whole panel up to clear the home indicator would leave a gap of
+        // bare scrim showing underneath it. Padding the content instead
+        // keeps the background flush and just gives the last field or
+        // button room to clear the indicator.
+        className="dialog-panel mt-auto w-full overflow-hidden rounded-t-2xl border border-[var(--border)] bg-[var(--surface)] pb-[env(safe-area-inset-bottom,0px)] shadow-[var(--shadow-lg)] outline-none sm:my-auto sm:max-w-lg sm:rounded-xl"
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-[var(--border)] px-5 py-4">
+          <div className="min-w-0">
+            <h2 id={titleId} className="text-[16px] font-semibold tracking-tight">
+              {title}
+            </h2>
+            {description && (
+              <p id={descId} className="mt-0.5 text-[13px] text-[var(--text-muted)]">
+                {description}
+              </p>
+            )}
           </div>
-
-          {/* The scrolling region. overscroll-contain stops a flick at the end
-              of this list from scrolling the page underneath. The safe-area
-              padding clears the home indicator on a phone. */}
-          <div
-            ref={bodyRef}
-            className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-[env(safe-area-inset-bottom,0px)]"
-          >
-            {children}
-          </div>
+          {/* Scrolling past the panel's edges no longer exposes a scrim to
+              tap, so the way out has to live inside the dialog. */}
+          <IconButton label="Close" onClick={onClose} className="-mr-1.5 shrink-0">
+            <XIcon className="h-4 w-4" />
+          </IconButton>
         </div>
+
+        {children}
       </div>
     </div>
   );
