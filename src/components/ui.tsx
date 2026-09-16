@@ -445,16 +445,23 @@ export function Avatar({ name, className }: { name: string; className?: string }
 ------------------------------------------------------------------------- */
 
 /**
- * The frame the user can actually see.
+ * The frame the user can actually see — used only to *nudge a focused field
+ * back into view* when the on-screen keyboard opens, never to size or place
+ * the dialog itself.
  *
- * `inset-0` and `100vh` describe the *layout* viewport, which on mobile
- * includes the strip behind the browser's URL bar and does not shrink when
- * the on-screen keyboard opens. A dialog sized to it puts its lower half —
- * in a form, its Save button — somewhere the user cannot reach: the overlay
- * scrolls its own content, and the page behind is locked, so there is
- * nothing left to scroll. The visual viewport is the part that is really
- * visible, and it reports both its height and how far it has been pushed
- * down, so the overlay can track it exactly.
+ * It used to do the latter too: the overlay's own top/height came from this
+ * hook, on the reasoning that `inset-0`'s default containing block is the
+ * *layout* viewport, which includes the strip behind the browser's URL bar
+ * and doesn't shrink for the keyboard. True, but it made the dialog's basic
+ * visibility depend on a browser API that isn't reliable everywhere it
+ * renders — an embedded webview reporting a degenerate visualViewport
+ * collapsed the positioning container to nothing, pinning the panel to the
+ * very top of the screen instead of centering it, on both phone and
+ * desktop. `100dvh`, plain CSS with no JS in the loop, already covers the
+ * URL-bar case correctly and cannot fail this way; the dialog is sized with
+ * that now. What dvh does not reliably cover is the keyboard specifically,
+ * which is what this hook still helps with, as an enhancement layered on
+ * top of a layout that already works without it.
  */
 function useVisualViewportFrame(open: boolean) {
   // While closed, nothing is subscribed: visualViewport's scroll event fires
@@ -483,13 +490,17 @@ function useVisualViewportFrame(open: boolean) {
     return `${viewport.offsetTop}:${viewport.height}`;
   }, [open]);
 
-  // Read during render rather than after it, so the panel's first painted
-  // frame is already the right size — on a phone the difference is the sheet
-  // visibly resizing as it opens.
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, () => "");
   if (!snapshot) return null;
 
   const [top, height] = snapshot.split(":").map(Number);
+  // Nothing downstream should act on a reading that isn't a real,
+  // positive size — this is exactly the kind of value that broke the
+  // dialog when it drove layout directly, and the nudge effect deserves
+  // the same guard even though a bad read there only costs the nudge.
+  if (!Number.isFinite(top) || !Number.isFinite(height) || height <= 0) {
+    return null;
+  }
   return { top, height };
 }
 
@@ -640,13 +651,12 @@ export function Dialog({
 
   return (
     <div
-      className="fixed inset-x-0 z-50 flex justify-center"
-      // Pinned to the visible frame, not the layout viewport, so nothing can
-      // come to rest under the browser chrome or behind the keyboard. The
-      // dvh fallback covers browsers without a visualViewport.
-      style={
-        frame ? { top: frame.top, height: frame.height } : { top: 0, height: "100dvh" }
-      }
+      // 100dvh rather than inset-0's default (the *large* viewport, which
+      // includes the space behind a collapsed mobile URL bar): plain CSS,
+      // resolved by the browser's own layout, so it can't collapse the way
+      // a JS-computed value can in an environment where visualViewport
+      // behaves unexpectedly.
+      className="fixed inset-x-0 top-0 z-50 flex h-[100dvh] justify-center"
     >
       {/* The scrim is dark enough to isolate the panel rather than merely
           tint the page behind it. */}
@@ -657,8 +667,8 @@ export function Dialog({
       />
 
       {/* A sheet rising from the bottom edge on a phone, a centred panel from
-          sm up. Either way it is capped at the frame's height, so the panel
-          itself never overflows — only its body scrolls. */}
+          sm up. Either way it is capped at this wrapper's height (100dvh),
+          so the panel itself never overflows — only its body scrolls. */}
       <div className="relative z-10 flex h-full w-full items-end justify-center sm:items-center sm:p-4">
         <div
           ref={panelRef}
