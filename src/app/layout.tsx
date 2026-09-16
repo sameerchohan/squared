@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { IBM_Plex_Sans } from "next/font/google";
 import "./globals.css";
 
@@ -11,6 +11,16 @@ const plexSans = IBM_Plex_Sans({
   weight: ["400", "500", "600", "700"],
   display: "swap",
 });
+
+// The masthead is a deep pine in both themes, so Safari's chrome on iOS can
+// be painted the same colour and the app reads as one surface to the top of
+// the screen. No maximum-scale: pinch zoom stays available.
+export const viewport: Viewport = {
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#143b30" },
+    { media: "(prefers-color-scheme: dark)", color: "#10241e" },
+  ],
+};
 
 export const metadata: Metadata = {
   title: "Squared — Split expenses, settle up for real",

@@ -213,3 +213,118 @@ describe("computeShares — conservation property", () => {
     }
   });
 });
+
+import { computeShareRows } from "./splits";
+
+describe("computeShares — equal with covering", () => {
+  it("charges a sponsor for their guest and leaves the bill exact", () => {
+    // $70 dinner, six members, Ali covering Sara who has no account.
+    const shares = computeShares(7000, {
+      type: "equal",
+      participants: ["ali", "b", "c", "d", "e", "f"],
+      guests: [{ guestId: "sara", sponsorUserId: "ali" }],
+    });
+    expect(shares).toEqual([
+      { userId: "ali", owedCents: 2000 },
+      { userId: "b", owedCents: 1000 },
+      { userId: "c", owedCents: 1000 },
+      { userId: "d", owedCents: 1000 },
+      { userId: "e", owedCents: 1000 },
+      { userId: "f", owedCents: 1000 },
+    ]);
+    expect(sum(shares)).toBe(7000);
+  });
+
+  it("charges a covered member nothing and moves it to whoever covers them", () => {
+    const shares = computeShares(7000, {
+      type: "equal",
+      participants: [
+        { userId: "ali" },
+        { userId: "sara", coveredBy: "ali" },
+        "c",
+        "d",
+        "e",
+        "f",
+        "g",
+      ],
+    });
+    expect(shares).toEqual([
+      { userId: "ali", owedCents: 2000 },
+      { userId: "sara", owedCents: 0 },
+      { userId: "c", owedCents: 1000 },
+      { userId: "d", owedCents: 1000 },
+      { userId: "e", owedCents: 1000 },
+      { userId: "f", owedCents: 1000 },
+      { userId: "g", owedCents: 1000 },
+    ]);
+    expect(sum(shares)).toBe(7000);
+  });
+
+  it("splits to the same amounts whether the covered person has an account", () => {
+    const asGuest = computeShares(7000, {
+      type: "equal",
+      participants: ["ali", "c", "d", "e", "f", "g"],
+      guests: [{ guestId: "sara", sponsorUserId: "ali" }],
+    });
+    const asMember = computeShares(7000, {
+      type: "equal",
+      participants: [
+        { userId: "ali" },
+        { userId: "sara", coveredBy: "ali" },
+        "c",
+        "d",
+        "e",
+        "f",
+        "g",
+      ],
+    });
+    // Same people, same money; the member split just also records Sara at zero.
+    expect(asMember.filter((s) => s.userId !== "sara")).toEqual(asGuest);
+  });
+
+  it("never hands a leftover cent to somebody who is being covered", () => {
+    // $1.00 three ways where one share is doubled: 67 / 0 / 33.
+    const shares = computeShares(100, {
+      type: "equal",
+      participants: [{ userId: "a" }, { userId: "b", coveredBy: "a" }, "c"],
+    });
+    expect(shares).toEqual([
+      { userId: "a", owedCents: 67 },
+      { userId: "b", owedCents: 0 },
+      { userId: "c", owedCents: 33 },
+    ]);
+    expect(sum(shares)).toBe(100);
+  });
+
+  it("reports the share count and coverer for persisting", () => {
+    const rows = computeShareRows(7000, {
+      type: "equal",
+      participants: [{ userId: "ali" }, { userId: "sara", coveredBy: "ali" }],
+      guests: [{ guestId: "kid", sponsorUserId: "ali" }],
+    });
+    expect(rows).toEqual([
+      { userId: "ali", owedCents: 7000, shareCount: 3, coveredBy: null },
+      { userId: "sara", owedCents: 0, shareCount: 0, coveredBy: "ali" },
+    ]);
+  });
+
+  it("marks plain splits as one share each with nobody covering", () => {
+    const rows = computeShareRows(300, {
+      type: "exact",
+      shares: [
+        { userId: "a", amountCents: 100 },
+        { userId: "b", amountCents: 200 },
+      ],
+    });
+    expect(rows.every((r) => r.shareCount === 1 && r.coveredBy === null)).toBe(true);
+  });
+
+  it("refuses a split whose covering does not make sense", () => {
+    expect(() =>
+      computeShares(1000, {
+        type: "equal",
+        participants: [{ userId: "a", coveredBy: "nobody" }, "b"],
+      })
+    ).toThrow(/part of this expense/i);
+  });
+});

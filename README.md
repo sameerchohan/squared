@@ -1,6 +1,6 @@
 # Squared
 
-Squared splits group expenses like Splitwise, but settling up moves real money. Members log shared expenses with equal, exact-amount, or percentage splits; the app nets everyone's position within a group and reduces the debts to the fewest transfers that clear them; then a member pays what they owe through Stripe Connect, and the funds land in the recipient's connected account. There is no "mark as paid" checkbox — a settlement is a payment or it is nothing.
+Squared splits group expenses like Splitwise, but settling up moves real money. Members log shared expenses with equal, exact-amount, or percentage splits; the app nets everyone's position within a group and reduces the debts to the fewest transfers that clear them; then a member pays what they owe through Stripe Connect, and the funds land in the recipient's connected account. Money that moved somewhere the app cannot see, such as cash or a bank app, can be recorded instead, but the two are stored as different things and never conflated: a Stripe settlement is confirmed by a webhook, a recorded one is confirmed by the payer and says so wherever it appears.
 
 **[Live demo →](https://squared.sameerchohan.com)**  ·  sign in as `priya@squared.demo` / `demo1234`
 

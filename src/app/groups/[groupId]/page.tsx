@@ -11,12 +11,14 @@ import {
   Button,
   Card,
   CardHeader,
+  CollapsibleCard,
   ConfirmDialog,
   Dialog,
   EmptyState,
   Field,
   IconButton,
   Input,
+  Select,
   Skeleton,
   cx,
 } from "@/components/ui";
@@ -34,8 +36,10 @@ import {
   XIcon,
 } from "@/components/icons";
 import { api, UnauthorizedError } from "@/lib/client";
+import type { StoredItemization } from "@/db/schema";
 import { canModifyExpense } from "@/lib/expense-rules";
 import { formatCents } from "@/lib/format";
+import type { ScannedReceipt } from "@/lib/scanned-receipt";
 
 type Me = { id: string; name: string; email: string };
 type Member = {
@@ -45,6 +49,12 @@ type Member = {
   stripeOnboardingStatus: string;
 };
 type Group = { id: string; name: string; createdBy: string };
+type Guest = {
+  id: string;
+  name: string;
+  sponsorUserId: string;
+  sponsorName: string;
+};
 type Expense = {
   id: string;
   paidBy: string;
@@ -52,7 +62,14 @@ type Expense = {
   amountCents: number;
   splitType: string;
   createdAt: string;
-  shares: { userId: string; owedCents: number }[];
+  shares: {
+    userId: string;
+    owedCents: number;
+    shareCount: number;
+    coveredBy: string | null;
+  }[];
+  guests: { guestId: string; name: string; sponsorUserId: string }[];
+  itemization: StoredItemization | null;
 };
 type Transfer = { fromUser: string; toUser: string; amountCents: number };
 type Balances = {
@@ -64,6 +81,7 @@ type Settlement = {
   fromUser: string;
   toUser: string;
   amountCents: number;
+  method: string;
   status: string;
   createdAt: string;
 };
@@ -75,11 +93,28 @@ export default function GroupPage() {
   const [me, setMe] = useState<Me | null>(null);
   const [group, setGroup] = useState<Group | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
+  const [guests, setGuests] = useState<Guest[]>([]);
+  const [scanEnabled, setScanEnabled] = useState(false);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [balances, setBalances] = useState<Balances | null>(null);
   const [settlements, setSettlements] = useState<Settlement[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+
+  // Only handed to the form when the feature is switched on, so the button is
+  // simply absent rather than present and failing.
+  const scanReceipt = useCallback(
+    async (photo: Blob) => {
+      const form = new FormData();
+      form.append("image", photo, "receipt.jpg");
+      const { receipt } = await api<{ receipt: ScannedReceipt }>(
+        `/api/groups/${groupId}/receipt-scan`,
+        { method: "POST", body: form }
+      );
+      return receipt;
+    },
+    [groupId]
+  );
 
   // Every mutation calls this. One fetch of all four resources keeps the
   // balances, the expense list, and the settle-up plan from ever disagreeing
@@ -91,15 +126,27 @@ export default function GroupPage() {
     Promise.all([
       api<{ user: Me }>("/api/auth/me"),
       api<{ group: Group; members: Member[] }>(`/api/groups/${groupId}`),
+      api<{ guests: Guest[] }>(`/api/groups/${groupId}/guests`),
+      api<{ enabled: boolean }>(`/api/groups/${groupId}/receipt-scan`),
       api<{ expenses: Expense[] }>(`/api/groups/${groupId}/expenses`),
       api<Balances>(`/api/groups/${groupId}/balances`),
       api<{ settlements: Settlement[] }>(`/api/groups/${groupId}/settlements`),
     ])
-      .then(([meRes, detail, expensesRes, balancesRes, settlementsRes]) => {
+      .then(([
+        meRes,
+        detail,
+        guestsRes,
+        scanRes,
+        expensesRes,
+        balancesRes,
+        settlementsRes,
+      ]) => {
         if (cancelled) return;
         setMe(meRes.user);
         setGroup(detail.group);
         setMembers(detail.members);
+        setGuests(guestsRes.guests);
+        setScanEnabled(scanRes.enabled);
         setExpenses(expensesRes.expenses);
         setBalances(balancesRes);
         setSettlements(settlementsRes.settlements);
@@ -232,8 +279,11 @@ export default function GroupPage() {
           </div>
         )}
 
+        {/* min-w-0 on both columns: without it a grid track sizes to its
+            content's min-content width, and one nowrap control inside a card
+            silently widens the whole page past the viewport on a phone. */}
         <div className="mt-7 grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
-          <div className="flex flex-col gap-6">
+          <div className="flex min-w-0 flex-col gap-6">
             <SettleUpCard
               groupId={groupId}
               balances={balances}
@@ -245,13 +295,17 @@ export default function GroupPage() {
             <AddExpenseCard
               groupId={groupId}
               members={members}
+              guests={guests}
               meId={me.id}
               onChanged={reload}
+              onScanReceipt={scanEnabled ? scanReceipt : undefined}
             />
             <ExpenseList
               groupId={groupId}
               expenses={expenses}
               members={members}
+              groupGuests={guests}
+              onScanReceipt={scanEnabled ? scanReceipt : undefined}
               nameOf={nameOf}
               meId={me.id}
               createdBy={group.createdBy}
@@ -260,7 +314,7 @@ export default function GroupPage() {
             <SettlementHistory settlements={settlements} nameOf={nameOf} meId={me.id} />
           </div>
 
-          <div className="flex flex-col gap-6">
+          <div className="flex min-w-0 flex-col gap-6">
             <BalancesCard balances={balances} meId={me.id} />
             <MembersCard
               groupId={groupId}
@@ -269,6 +323,13 @@ export default function GroupPage() {
               createdBy={group.createdBy}
               onChanged={reload}
               onLeft={() => router.push("/")}
+            />
+            <GuestsCard
+              groupId={groupId}
+              guests={guests}
+              members={members}
+              meId={me.id}
+              onChanged={reload}
             />
           </div>
         </div>
@@ -284,11 +345,20 @@ function BalancesCard({
   balances: Balances;
   meId: string;
 }) {
-  const settled = balances.balances.every((b) => b.netCents === 0);
+  const unsettled = balances.balances.filter((b) => b.netCents !== 0).length;
+  const settled = unsettled === 0;
 
   return (
-    <Card>
-      <CardHeader title="Balances" description="Net position per member." />
+    <CollapsibleCard
+      title="Balances"
+      description="Net position per member."
+      storageKey="balances"
+      summary={
+        unsettled === 0
+          ? "Everyone's square"
+          : `${unsettled} ${unsettled === 1 ? "person is" : "people are"} not square yet`
+      }
+    >
       {settled ? (
         <EmptyState
           icon={<ScalesIcon className="h-5 w-5" />}
@@ -308,7 +378,7 @@ function BalancesCard({
                   </span>
                 )}
               </span>
-              <span className="text-right">
+              <span className="shrink-0 text-right">
                 <span
                   className={cx(
                     "tnum block text-[14px] font-semibold",
@@ -327,7 +397,7 @@ function BalancesCard({
           ))}
         </ul>
       )}
-    </Card>
+    </CollapsibleCard>
   );
 }
 
@@ -348,6 +418,12 @@ function SettleUpCard({
 }) {
   const [error, setError] = useState<string | null>(null);
   const [payingTo, setPayingTo] = useState<string | null>(null);
+  // Recording a payment Squared didn't process is a claim about the real
+  // world that everyone else in the group has to take at face value, so it
+  // goes through a confirmation rather than a single click.
+  const [confirming, setConfirming] = useState<Transfer | null>(null);
+  const [confirmError, setConfirmError] = useState<string | null>(null);
+  const [recording, setRecording] = useState(false);
 
   const mine = balances.suggestedTransfers.filter((t) => t.fromUser === meId);
   const others = balances.suggestedTransfers.filter((t) => t.fromUser !== meId);
@@ -368,16 +444,42 @@ function SettleUpCard({
     }
   }
 
+  async function recordCash(transfer: Transfer) {
+    setConfirmError(null);
+    setRecording(true);
+    try {
+      await api(`/api/groups/${groupId}/settlements`, {
+        method: "POST",
+        body: {
+          toUser: transfer.toUser,
+          amountCents: transfer.amountCents,
+          method: "cash",
+        },
+      });
+      setConfirming(null);
+      onChanged();
+    } catch (e) {
+      setConfirmError(
+        e instanceof Error ? e.message : "Couldn't record that payment."
+      );
+    } finally {
+      setRecording(false);
+    }
+  }
+
   if (balances.suggestedTransfers.length === 0) return null;
 
   return (
-    <Card>
-      <CardHeader
-        title="Settle up"
-        description={`${balances.suggestedTransfers.length} transfer${
-          balances.suggestedTransfers.length === 1 ? "" : "s"
-        } clears the whole group.`}
-      />
+    <CollapsibleCard
+      title="Settle up"
+      description={`${balances.suggestedTransfers.length} transfer${
+        balances.suggestedTransfers.length === 1 ? "" : "s"
+      } clears the whole group.`}
+      storageKey="settle-up"
+      summary={`${balances.suggestedTransfers.length} transfer${
+        balances.suggestedTransfers.length === 1 ? "" : "s"
+      } would clear the group`}
+    >
       <div className="p-5">
         {error && (
           <div className="mb-4">
@@ -402,19 +504,37 @@ function SettleUpCard({
                     </span>
                   </p>
                   {!canReceive && (
-                    <p className="mt-0.5 text-[12px] text-[var(--warning)]">
-                      {nameOf(t.toUser)} hasn&apos;t finished setting up payments yet.
+                    <p className="mt-0.5 text-[12px] text-[var(--text-muted)]">
+                      {nameOf(t.toUser)} can&apos;t take card payments here yet.
+                      Pay them however you normally do, then mark it paid.
                     </p>
                   )}
                 </div>
-                <Button
-                  size="sm"
-                  disabled={!canReceive || payingTo !== null}
-                  loading={payingTo === t.toUser}
-                  onClick={() => settleUp(t.toUser, t.amountCents)}
-                >
-                  Pay now
-                </Button>
+                <div className="flex w-full items-center gap-2 sm:w-auto">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="h-11 flex-1 sm:h-9 sm:flex-none"
+                    disabled={payingTo !== null}
+                    onClick={() => {
+                      setConfirmError(null);
+                      setConfirming(t);
+                    }}
+                  >
+                    Mark as paid
+                  </Button>
+                  {canReceive && (
+                    <Button
+                      size="sm"
+                      className="h-11 flex-1 sm:h-9 sm:flex-none"
+                      disabled={payingTo !== null}
+                      loading={payingTo === t.toUser}
+                      onClick={() => settleUp(t.toUser, t.amountCents)}
+                    >
+                      Pay now
+                    </Button>
+                  )}
+                </div>
               </li>
             );
           })}
@@ -436,11 +556,53 @@ function SettleUpCard({
         </ul>
 
         <p className="mt-4 border-t border-[var(--border)] pt-3 text-[12px] leading-relaxed text-[var(--text-faint)]">
-          Payments go through Stripe directly to the recipient&apos;s connected
-          account. Balances update automatically once a payment completes.
+          Card payments go through Stripe directly to the recipient&apos;s
+          connected account. Paid another way? Mark it as paid and everyone
+          in the group sees it settled.
         </p>
       </div>
-    </Card>
+
+      <Dialog
+        open={confirming !== null}
+        onClose={() => {
+          if (recording) return;
+          setConfirming(null);
+          setConfirmError(null);
+        }}
+        title="Mark this as paid?"
+      >
+        <div className="flex flex-col gap-4 p-5">
+          <p className="text-[14px] leading-relaxed text-[var(--text-muted)]">
+            {confirming
+              ? `This records that you already sent ${nameOf(confirming.toUser)} ${formatCents(confirming.amountCents)} outside Squared. Their balance clears too, and everyone in the group sees the payment.`
+              : ""}
+          </p>
+          {confirmError && <Alert>{confirmError}</Alert>}
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              className="h-11 sm:h-9"
+              onClick={() => {
+                setConfirming(null);
+                setConfirmError(null);
+              }}
+              disabled={recording}
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              className="h-11 sm:h-9"
+              loading={recording}
+              onClick={() => confirming && recordCash(confirming)}
+            >
+              Yes, I paid them
+            </Button>
+          </div>
+        </div>
+      </Dialog>
+    </CollapsibleCard>
   );
 }
 
@@ -454,6 +616,8 @@ function ExpenseList({
   groupId,
   expenses,
   members,
+  groupGuests,
+  onScanReceipt,
   nameOf,
   meId,
   createdBy,
@@ -462,6 +626,8 @@ function ExpenseList({
   groupId: string;
   expenses: Expense[];
   members: Member[];
+  groupGuests: Guest[];
+  onScanReceipt?: (photo: Blob) => Promise<ScannedReceipt>;
   nameOf: (id: string) => string;
   meId: string;
   createdBy: string;
@@ -489,8 +655,18 @@ function ExpenseList({
 
   return (
     <>
-      <Card>
-        <CardHeader title="Expenses" description="Most recent first." />
+      <CollapsibleCard
+        title="Expenses"
+        description="Most recent first."
+        storageKey="expenses"
+        summary={
+          expenses.length === 0
+            ? "Nothing logged yet"
+            : `${expenses.length} logged \u00b7 ${formatCents(
+                expenses.reduce((sum, e) => sum + e.amountCents, 0)
+              )} tracked`
+        }
+      >
         {expenses.length === 0 ? (
           <EmptyState
             icon={<ReceiptIcon className="h-5 w-5" />}
@@ -510,24 +686,45 @@ function ExpenseList({
               }).ok;
               return (
                 <li key={expense.id} className="group/row px-5 py-4">
+                  {/* The description wraps rather than truncating: on a
+                      phone a clipped "Dinner at El F…" is the one thing in
+                      the row you cannot reconstruct from context. */}
                   <div className="flex items-baseline justify-between gap-3">
-                    <p className="min-w-0 flex-1 truncate text-[15px] font-medium">
+                    <p className="min-w-0 flex-1 text-[15px] font-medium break-words">
                       {expense.description}
                     </p>
                     <p className="figure shrink-0 text-[16px]">
                       {formatCents(expense.amountCents)}
                     </p>
+                  </div>
+                  <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-[var(--text-muted)]">
+                    <span>{mine ? "You" : nameOf(expense.paidBy)} paid</span>
+                    <span aria-hidden="true">·</span>
+                    <Badge>
+                      {expense.itemization
+                        ? "Itemised"
+                        : (SPLIT_LABEL[expense.splitType] ?? expense.splitType)}
+                    </Badge>
+                    <span aria-hidden="true">·</span>
+                    <time dateTime={expense.createdAt}>
+                      {new Date(expense.createdAt).toLocaleDateString(undefined, {
+                        month: "short",
+                        day: "numeric",
+                      })}
+                    </time>
                     {/* Actions belong to whoever paid, and to the group's
-                        owner. On a pointer device they stay dim until the row
-                        is hovered or a control inside takes focus; on touch
-                        there is no hover, so they are always visible rather
-                        than unreachable. */}
+                        owner, and sit at the end of the meta line so they
+                        never eat the description's width. On a pointer
+                        device they stay hidden until the row is hovered or
+                        focused; on a touch screen, where neither happens,
+                        they are always visible. */}
                     {canModify && (
-                      <div className="flex shrink-0 gap-0.5 transition-opacity duration-150 sm:opacity-0 sm:focus-within:opacity-100 sm:group-hover/row:opacity-100">
+                      <div className="-my-2 ml-auto flex shrink-0 gap-0.5 transition-opacity duration-150 focus-within:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/row:opacity-100">
                         <IconButton
                           label={mine ? "Edit expense" : `Edit ${nameOf(expense.paidBy)}'s expense`}
                           onClick={() => setEditing(expense)}
                         >
+
                           <PencilIcon className="h-4 w-4" />
                         </IconButton>
                         <IconButton
@@ -544,25 +741,37 @@ function ExpenseList({
                       </div>
                     )}
                   </div>
-                  <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-[var(--text-muted)]">
-                    <span>{mine ? "You" : nameOf(expense.paidBy)} paid</span>
-                    <span aria-hidden="true">·</span>
-                    <Badge>{SPLIT_LABEL[expense.splitType] ?? expense.splitType}</Badge>
-                    <span aria-hidden="true">·</span>
-                    <time dateTime={expense.createdAt}>
-                      {new Date(expense.createdAt).toLocaleDateString(undefined, {
-                        month: "short",
-                        day: "numeric",
-                      })}
-                    </time>
-                  </div>
                   <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-[var(--text-muted)]">
-                    {expense.shares.map((sh) => (
-                      <li key={sh.userId} className="tnum">
-                        {sh.userId === meId ? "You" : nameOf(sh.userId)}{" "}
-                        <span className="font-medium text-[var(--text)]">
-                          {formatCents(sh.owedCents)}
-                        </span>
+                    {expense.shares.map((sh) => {
+                      const who = sh.userId === meId ? "You" : nameOf(sh.userId);
+                      // Somebody else picked this up. Their row stays so the
+                      // expense still shows they were there, owing nothing.
+                      if (sh.coveredBy) {
+                        return (
+                          <li key={sh.userId}>
+                            {who} covered by{" "}
+                            {sh.coveredBy === meId ? "you" : nameOf(sh.coveredBy)}
+                          </li>
+                        );
+                      }
+                      return (
+                        <li key={sh.userId} className="tnum">
+                          {who}
+                          {sh.shareCount > 1 && (
+                            <span className="ml-1 font-medium text-[var(--brand)]">
+                              &times;{sh.shareCount}
+                            </span>
+                          )}{" "}
+                          <span className="font-medium text-[var(--text)]">
+                            {formatCents(sh.owedCents)}
+                          </span>
+                        </li>
+                      );
+                    })}
+                    {expense.guests.map((g) => (
+                      <li key={g.guestId}>
+                        {g.name} (guest) covered by{" "}
+                        {g.sponsorUserId === meId ? "you" : nameOf(g.sponsorUserId)}
                       </li>
                     ))}
                   </ul>
@@ -571,7 +780,7 @@ function ExpenseList({
             })}
           </ul>
         )}
-      </Card>
+      </CollapsibleCard>
 
       <Dialog
         open={editing !== null}
@@ -586,7 +795,21 @@ function ExpenseList({
         {editing && (
           <ExpenseForm
             members={members}
+            // Guests this expense used may since have been archived, and an
+            // archived guest is no longer in the group's live list. Merging
+            // them back in is what lets an old bill still open and save.
+            guests={[
+              ...groupGuests,
+              ...editing.guests
+                .filter((g) => !groupGuests.some((live) => live.id === g.guestId))
+                .map((g) => ({
+                  id: g.guestId,
+                  name: g.name,
+                  sponsorUserId: g.sponsorUserId,
+                })),
+            ]}
             meId={meId}
+            onScanReceipt={onScanReceipt}
             submitLabel="Save changes"
             onCancel={() => setEditing(null)}
             initial={{
@@ -595,6 +818,8 @@ function ExpenseList({
               paidBy: editing.paidBy,
               splitType: editing.splitType as "equal" | "exact" | "percentage",
               shares: editing.shares,
+              guests: editing.guests,
+              itemization: editing.itemization,
             }}
             onSubmit={async (payload) => {
               await api(`/api/groups/${groupId}/expenses/${editing.id}`, {
@@ -656,8 +881,17 @@ function SettlementHistory({
   if (settlements.length === 0) return null;
 
   return (
-    <Card>
-      <CardHeader title="Payments" description="Settlements in this group." />
+    <CollapsibleCard
+      title="Payments"
+      description="Settlements in this group."
+      storageKey="payments"
+      defaultOpen={false}
+      summary={
+        settlements.length === 0
+          ? "Nothing paid yet"
+          : `${settlements.length} recorded`
+      }
+    >
       <ul className="divide-y divide-[var(--border)]">
         {settlements.map((s) => {
           const status = SETTLEMENT_STATUS[s.status] ?? {
@@ -672,15 +906,15 @@ function SettlementHistory({
                   <ArrowRightIcon className="mx-1.5 inline h-3.5 w-3.5 text-[var(--text-faint)]" />
                   {s.toUser === meId ? "you" : nameOf(s.toUser)}
                 </p>
-                <time
-                  dateTime={s.createdAt}
-                  className="text-[12px] text-[var(--text-muted)]"
-                >
-                  {new Date(s.createdAt).toLocaleDateString(undefined, {
-                    month: "short",
-                    day: "numeric",
-                  })}
-                </time>
+                <p className="text-[12px] text-[var(--text-muted)]">
+                  <time dateTime={s.createdAt}>
+                    {new Date(s.createdAt).toLocaleDateString(undefined, {
+                      month: "short",
+                      day: "numeric",
+                    })}
+                  </time>
+                  {s.method === "cash" && <span> · Paid outside Squared</span>}
+                </p>
               </div>
               <span className="tnum text-[14px] font-semibold">
                 {formatCents(s.amountCents)}
@@ -693,7 +927,7 @@ function SettlementHistory({
           );
         })}
       </ul>
-    </Card>
+    </CollapsibleCard>
   );
 }
 
@@ -771,8 +1005,14 @@ function MembersCard({
 
   return (
     <>
-      <Card className="h-fit">
-        <CardHeader title="Members" description="Everyone splitting costs here." />
+      <CollapsibleCard
+        className="h-fit"
+        title="Members"
+        description="Everyone splitting costs here."
+        storageKey="members"
+        defaultOpen={false}
+        summary={`${members.length} ${members.length === 1 ? "person" : "people"}`}
+      >
         <ul className="divide-y divide-[var(--border)]">
           {members.map((m) => {
             const self = m.id === meId;
@@ -795,21 +1035,29 @@ function MembersCard({
                       </span>
                     )}
                   </p>
-                  <p className="truncate text-[12px] text-[var(--text-muted)]">{m.email}</p>
+                  {/* basis-36 rather than a breakpoint: the badge drops to
+                      its own line exactly when the email would otherwise be
+                      squeezed to nothing, which depends on the card's width,
+                      not the window's. */}
+                  <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <p className="min-w-0 flex-1 basis-36 truncate text-[12px] text-[var(--text-muted)]">
+                      {m.email}
+                    </p>
+                    {m.stripeOnboardingStatus === "active" && (
+                      <span className="shrink-0">
+                        <Badge tone="positive">
+                          <CheckIcon className="h-3 w-3" />
+                          Can receive
+                        </Badge>
+                      </span>
+                    )}
+                  </div>
                 </div>
-                {m.stripeOnboardingStatus === "active" ? (
-                  <Badge tone="positive">
-                    <CheckIcon className="h-3 w-3" />
-                    Can receive
-                  </Badge>
-                ) : (
-                  <Badge tone="neutral">No payouts</Badge>
-                )}
                 {canRemove && members.length > 1 && (
                   <IconButton
                     label={self ? "Leave this group" : `Remove ${m.name}`}
                     onClick={() => setRemoving(m)}
-                    className="transition-opacity duration-150 hover:text-[var(--negative)] sm:opacity-0 sm:focus-within:opacity-100 sm:group-hover/member:opacity-100"
+                    className="transition-opacity duration-150 focus-within:opacity-100 hover:text-[var(--negative)] [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/member:opacity-100"
                   >
                     <XIcon className="h-4 w-4" />
                   </IconButton>
@@ -843,7 +1091,7 @@ function MembersCard({
             Add member
           </Button>
         </form>
-      </Card>
+      </CollapsibleCard>
 
       <ConfirmDialog
         open={removing !== null}
@@ -866,16 +1114,196 @@ function MembersCard({
   );
 }
 
-function AddExpenseCard({
+/**
+ * Guests are people on the trip with no Squared account: a partner, a kid, a
+ * friend who never signed up. They hold no balance of their own, because they
+ * have no way to pay one. Their share of an expense is charged to whoever
+ * covers them, which is why every guest must name a sponsor.
+ */
+function GuestsCard({
   groupId,
+  guests,
   members,
   meId,
   onChanged,
 }: {
   groupId: string;
+  guests: Guest[];
   members: Member[];
   meId: string;
   onChanged: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [sponsorUserId, setSponsorUserId] = useState(meId);
+  const [fieldError, setFieldError] = useState<string | undefined>();
+  const [formError, setFormError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [removing, setRemoving] = useState<Guest | null>(null);
+  const [removeBusy, setRemoveBusy] = useState(false);
+  const [removeError, setRemoveError] = useState<string | null>(null);
+
+  async function addGuest(event: React.FormEvent) {
+    event.preventDefault();
+    setFormError(null);
+    const value = name.trim();
+    if (!value) {
+      setFieldError("Give them a name.");
+      return;
+    }
+    setFieldError(undefined);
+    setSubmitting(true);
+    try {
+      await api(`/api/groups/${groupId}/guests`, {
+        method: "POST",
+        body: { name: value, sponsorUserId },
+      });
+      setName("");
+      onChanged();
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : "Couldn't add that guest.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function confirmRemove() {
+    if (!removing) return;
+    setRemoveBusy(true);
+    setRemoveError(null);
+    try {
+      await api(`/api/groups/${groupId}/guests/${removing.id}`, {
+        method: "DELETE",
+      });
+      setRemoving(null);
+      onChanged();
+    } catch (e) {
+      setRemoveError(
+        e instanceof Error ? e.message : "Couldn't remove that guest."
+      );
+    } finally {
+      setRemoveBusy(false);
+    }
+  }
+
+  return (
+    <CollapsibleCard
+      title="Guests"
+      description="People here without an account. Their share is paid by whoever covers them."
+      storageKey="guests"
+      summary={
+        guests.length === 0
+          ? "None yet"
+          : guests.map((g) => g.name).join(", ")
+      }
+    >
+
+      {guests.length === 0 ? (
+        <EmptyState
+          icon={<UsersIcon className="h-5 w-5" />}
+          title="No guests yet"
+          description="Add someone along for the trip who isn't on Squared, like a partner or a kid."
+        />
+      ) : (
+        <ul className="divide-y divide-[var(--border)]">
+          {guests.map((g) => (
+            <li key={g.id} className="flex items-center gap-3 px-5 py-3">
+              <Avatar name={g.name} className="h-8 w-8 shrink-0 text-[12px]" />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[14px] font-medium">{g.name}</p>
+                <p className="truncate text-[12px] text-[var(--text-muted)]">
+                  Covered by{" "}
+                  {g.sponsorUserId === meId ? "you" : g.sponsorName}
+                </p>
+              </div>
+              <IconButton
+                label={`Remove ${g.name}`}
+                onClick={() => setRemoving(g)}
+                className="hover:text-[var(--negative)]"
+              >
+                <TrashIcon className="h-4 w-4" />
+              </IconButton>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <form
+        onSubmit={addGuest}
+        noValidate
+        className="flex flex-col gap-3 border-t border-[var(--border)] p-5"
+      >
+        {formError && <Alert>{formError}</Alert>}
+        <Field label="Name" error={fieldError}>
+          {({ id, describedBy, invalid }) => (
+            <Input
+              id={id}
+              aria-describedby={describedBy}
+              placeholder="Sara"
+              maxLength={80}
+              value={name}
+              invalid={invalid}
+              onChange={(e) => {
+                setName(e.target.value);
+                if (fieldError) setFieldError(undefined);
+              }}
+            />
+          )}
+        </Field>
+        <Field label="Covered by">
+          {({ id }) => (
+            <Select
+              id={id}
+              value={sponsorUserId}
+              onChange={(e) => setSponsorUserId(e.target.value)}
+            >
+              {members.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.id === meId ? "You" : m.name}
+                </option>
+              ))}
+            </Select>
+          )}
+        </Field>
+        <Button type="submit" variant="secondary" loading={submitting}>
+          Add guest
+        </Button>
+      </form>
+
+      <ConfirmDialog
+        open={removing !== null}
+        onClose={() => {
+          setRemoving(null);
+          setRemoveError(null);
+        }}
+        onConfirm={confirmRemove}
+        title="Remove this guest?"
+        body={
+          removing
+            ? `${removing.name} will stop appearing when you add an expense. Expenses they were already part of keep their record exactly as it is.`
+            : ""
+        }
+        confirmLabel="Remove guest"
+        loading={removeBusy}
+        error={removeError}
+      />
+    </CollapsibleCard>
+  );
+}
+
+function AddExpenseCard({
+  groupId,
+  members,
+  guests,
+  meId,
+  onChanged,
+  onScanReceipt,
+}: {
+  groupId: string;
+  members: Member[];
+  guests: Guest[];
+  meId: string;
+  onChanged: () => void;
+  onScanReceipt?: (photo: Blob) => Promise<ScannedReceipt>;
 }) {
   const [saved, setSaved] = useState<string | null>(null);
 
@@ -890,7 +1318,9 @@ function AddExpenseCard({
       )}
       <ExpenseForm
         members={members}
+        guests={guests}
         meId={meId}
+        onScanReceipt={onScanReceipt}
         submitLabel="Add expense"
         onSubmit={async (payload) => {
           await api(`/api/groups/${groupId}/expenses`, { method: "POST", body: payload });

@@ -22,6 +22,27 @@
       "when": 1787788557020,
       "tag": "0002_drop_event_payload",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1788727625614,
+      "tag": "0003_settlement_method",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1788977242973,
+      "tag": "0004_careless_sheva_callister",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1788983684143,
+      "tag": "0005_tired_bill_hollister",
+      "breakpoints": true
     }
   ]
 }

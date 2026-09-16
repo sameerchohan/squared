@@ -8,7 +8,7 @@ import {
   useRef,
   useSyncExternalStore,
 } from "react";
-import { AlertIcon, SpinnerIcon, XIcon } from "./icons";
+import { AlertIcon, ChevronDownIcon, SpinnerIcon, XIcon } from "./icons";
 
 /* -------------------------------------------------------------------------
    Primitives shared across every screen. Centralising them is what keeps the
@@ -117,6 +117,125 @@ export function CardHeader({
   );
 }
 
+/* Which cards a person has folded away, kept in localStorage and read through
+   useSyncExternalStore so the server render (nothing remembered) and the
+   client render (whatever this device remembers) can disagree safely. */
+const cardListeners = new Set<() => void>();
+
+function cardStorageKey(key: string) {
+  return `squared.card.${key}`;
+}
+
+function subscribeToCardState(onChange: () => void) {
+  cardListeners.add(onChange);
+  // Another tab folding the same card should be reflected here too.
+  window.addEventListener("storage", onChange);
+  return () => {
+    cardListeners.delete(onChange);
+    window.removeEventListener("storage", onChange);
+  };
+}
+
+function setCardState(key: string, open: boolean) {
+  try {
+    window.localStorage.setItem(cardStorageKey(key), open ? "open" : "closed");
+  } catch {
+    // Private mode or storage disabled. Not being able to remember the choice
+    // is not a reason to refuse to make it, so fall through and notify anyway.
+  }
+  for (const onChange of cardListeners) onChange();
+}
+
+/**
+ * A card whose body can be folded away, remembering the choice on this device.
+ *
+ * Most of this page is reference material: a payment log, a member list, the
+ * Stripe machinery you are not using today. On a phone all of it sits between
+ * you and the one thing you opened the app to do. Collapsing is per person and
+ * per device rather than saved to the group, because it is a preference about
+ * a screen, not a fact about the trip.
+ *
+ * A closed card still shows `summary`, so folding something away never costs
+ * you the number that would have made you open it.
+ */
+export function CollapsibleCard({
+  title,
+  description,
+  summary,
+  storageKey,
+  defaultOpen = true,
+  children,
+  className,
+}: {
+  title: string;
+  description?: string;
+  summary?: React.ReactNode;
+  storageKey: string;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  const bodyId = useId();
+  const remembered = useSyncExternalStore(
+    subscribeToCardState,
+    () => {
+      try {
+        return window.localStorage.getItem(cardStorageKey(storageKey));
+      } catch {
+        return null;
+      }
+    },
+    () => null
+  );
+  const open = remembered === null ? defaultOpen : remembered === "open";
+
+  return (
+    <Card className={className}>
+      <h2>
+        <button
+          type="button"
+          onClick={() => setCardState(storageKey, !open)}
+          aria-expanded={open}
+          aria-controls={bodyId}
+          className={cx(
+            // The whole header is the target. On a phone a lone chevron is a
+            // miss waiting to happen, and there is nothing else here to hit.
+            "flex w-full cursor-pointer items-center gap-3 px-5 py-4 text-left",
+            "transition-colors duration-150 hover:bg-[var(--surface-subtle)]",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-ring)]",
+            open && "border-b border-[var(--border)]"
+          )}
+        >
+          <span className="min-w-0 flex-1">
+            <span className="block text-[15px] font-semibold tracking-tight">
+              {title}
+            </span>
+            {open && description && (
+              <span className="mt-0.5 block text-[13px] font-normal text-[var(--text-muted)]">
+                {description}
+              </span>
+            )}
+            {!open && summary && (
+              <span className="mt-0.5 block truncate text-[13px] font-normal text-[var(--text-muted)]">
+                {summary}
+              </span>
+            )}
+          </span>
+          <ChevronDownIcon
+            className={cx(
+              "h-4 w-4 shrink-0 text-[var(--text-faint)] transition-transform duration-200",
+              !open && "-rotate-90"
+            )}
+          />
+        </button>
+      </h2>
+      <div id={bodyId} hidden={!open}>
+        {children}
+      </div>
+    </Card>
+  );
+}
+
 /* A labelled field with helper text and an error slot directly beneath the
    input — never a summary far from the control that caused it. */
 export function Field({
@@ -163,8 +282,11 @@ export function Field({
   );
 }
 
+// 16px is not a taste decision: iOS Safari zooms the whole page in when a
+// focused control's text is smaller, and never zooms back out. Every control
+// in the app inherits this, so no field can reintroduce the bug locally.
 const CONTROL_BASE =
-  "h-11 w-full rounded-lg border bg-[var(--surface)] px-3 text-[15px] text-[var(--text)] " +
+  "h-11 w-full rounded-lg border bg-[var(--surface)] px-3 text-[16px] text-[var(--text)] " +
   "placeholder:text-[var(--text-faint)] transition-colors duration-150 " +
   "focus:border-[var(--brand)] disabled:cursor-not-allowed disabled:opacity-60";
 
@@ -607,10 +729,22 @@ export function ConfirmDialog({
         <p className="text-[14px] leading-relaxed text-[var(--text-muted)]">{body}</p>
         {error && <Alert>{error}</Alert>}
         <div className="flex justify-end gap-2">
-          <Button variant="secondary" size="sm" onClick={onClose} disabled={loading}>
+          <Button
+            variant="secondary"
+            size="sm"
+            className="h-11 sm:h-9"
+            onClick={onClose}
+            disabled={loading}
+          >
             Cancel
           </Button>
-          <Button variant="danger" size="sm" onClick={onConfirm} loading={loading}>
+          <Button
+            variant="danger"
+            size="sm"
+            className="h-11 sm:h-9"
+            onClick={onConfirm}
+            loading={loading}
+          >
             {confirmLabel}
           </Button>
         </div>
@@ -631,8 +765,9 @@ export function IconButton({
       aria-label={label}
       title={label}
       className={cx(
-        // 32px visual, but padding pushes the hit area toward the 44px floor.
-        "grid h-8 w-8 cursor-pointer place-items-center rounded-lg text-[var(--text-faint)]",
+        // 40px on a phone, where the finger is the pointer; 32px from the
+        // small breakpoint up, where a cursor makes that unnecessarily heavy.
+        "grid h-10 w-10 cursor-pointer place-items-center rounded-lg text-[var(--text-faint)] sm:h-8 sm:w-8",
         "transition-colors duration-150 hover:bg-[var(--surface-subtle)] hover:text-[var(--text)]",
         "disabled:pointer-events-none disabled:opacity-40",
         className

@@ -4,8 +4,18 @@ import { cookies } from "next/headers";
 import { ApiError } from "./errors";
 
 const SESSION_COOKIE = "session";
-const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
 const BCRYPT_ROUNDS = 12;
+
+// A week by default. Sessions are not refreshed on use, so this is measured
+// from sign-in: a deployment whose natural life is longer than a demo can
+// raise it with SESSION_TTL_DAYS rather than signing everyone out mid-use.
+// Anything unparseable, negative, or beyond a year falls back to the default
+// instead of issuing a session that never expires.
+function sessionTtlSeconds(): number {
+  const days = Number(process.env.SESSION_TTL_DAYS);
+  const valid = Number.isFinite(days) && days > 0 && days <= 365;
+  return Math.round((valid ? days : 7) * 24 * 60 * 60);
+}
 
 function jwtSecret(): Uint8Array {
   const secret = process.env.JWT_SECRET;
@@ -32,11 +42,12 @@ export function verifyPassword(
 
 /** Signs a session JWT for the user and sets it as an httpOnly cookie. */
 export async function createSession(userId: string): Promise<void> {
+  const ttlSeconds = sessionTtlSeconds();
   const token = await new SignJWT({})
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(userId)
     .setIssuedAt()
-    .setExpirationTime(`${SESSION_TTL_SECONDS}s`)
+    .setExpirationTime(`${ttlSeconds}s`)
     .sign(jwtSecret());
 
   const cookieStore = await cookies();
@@ -45,7 +56,7 @@ export async function createSession(userId: string): Promise<void> {
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
     path: "/",
-    maxAge: SESSION_TTL_SECONDS,
+    maxAge: ttlSeconds,
   });
 }
 
