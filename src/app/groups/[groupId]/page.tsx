@@ -34,6 +34,7 @@ import {
   XIcon,
 } from "@/components/icons";
 import { api, UnauthorizedError } from "@/lib/client";
+import { canModifyExpense } from "@/lib/expense-rules";
 import { formatCents } from "@/lib/format";
 
 type Me = { id: string; name: string; email: string };
@@ -253,6 +254,7 @@ export default function GroupPage() {
               members={members}
               nameOf={nameOf}
               meId={me.id}
+              createdBy={group.createdBy}
               onChanged={reload}
             />
             <SettlementHistory settlements={settlements} nameOf={nameOf} meId={me.id} />
@@ -454,6 +456,7 @@ function ExpenseList({
   members,
   nameOf,
   meId,
+  createdBy,
   onChanged,
 }: {
   groupId: string;
@@ -461,6 +464,7 @@ function ExpenseList({
   members: Member[];
   nameOf: (id: string) => string;
   meId: string;
+  createdBy: string;
   onChanged: () => void;
 }) {
   const [editing, setEditing] = useState<Expense | null>(null);
@@ -497,6 +501,13 @@ function ExpenseList({
           <ul className="divide-y divide-[var(--border)]">
             {expenses.map((expense) => {
               const mine = expense.paidBy === meId;
+              // Same rule the API enforces, so a row never offers an action
+              // the server would refuse.
+              const canModify = canModifyExpense({
+                actorId: meId,
+                expensePaidBy: expense.paidBy,
+                groupCreatedBy: createdBy,
+              }).ok;
               return (
                 <li key={expense.id} className="group/row px-5 py-4">
                   <div className="flex items-baseline justify-between gap-3">
@@ -506,15 +517,25 @@ function ExpenseList({
                     <p className="figure shrink-0 text-[16px]">
                       {formatCents(expense.amountCents)}
                     </p>
-                    {/* Actions belong to whoever paid; they stay dim until the
-                        row is hovered or a control inside takes focus. */}
-                    {mine && (
-                      <div className="flex shrink-0 gap-0.5 opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover/row:opacity-100">
-                        <IconButton label="Edit expense" onClick={() => setEditing(expense)}>
+                    {/* Actions belong to whoever paid, and to the group's
+                        owner. On a pointer device they stay dim until the row
+                        is hovered or a control inside takes focus; on touch
+                        there is no hover, so they are always visible rather
+                        than unreachable. */}
+                    {canModify && (
+                      <div className="flex shrink-0 gap-0.5 transition-opacity duration-150 sm:opacity-0 sm:focus-within:opacity-100 sm:group-hover/row:opacity-100">
+                        <IconButton
+                          label={mine ? "Edit expense" : `Edit ${nameOf(expense.paidBy)}'s expense`}
+                          onClick={() => setEditing(expense)}
+                        >
                           <PencilIcon className="h-4 w-4" />
                         </IconButton>
                         <IconButton
-                          label="Delete expense"
+                          label={
+                            mine
+                              ? "Delete expense"
+                              : `Delete ${nameOf(expense.paidBy)}'s expense`
+                          }
                           onClick={() => setDeleting(expense)}
                           className="hover:text-[var(--negative)]"
                         >
@@ -556,7 +577,11 @@ function ExpenseList({
         open={editing !== null}
         onClose={() => setEditing(null)}
         title="Edit expense"
-        description="Shares are recalculated and balances update on save."
+        description={
+          editing && editing.paidBy !== meId
+            ? `Paid by ${nameOf(editing.paidBy)}. Shares are recalculated and balances update on save.`
+            : "Shares are recalculated and balances update on save."
+        }
       >
         {editing && (
           <ExpenseForm
@@ -593,7 +618,12 @@ function ExpenseList({
         title="Delete this expense?"
         body={
           deleting
-            ? `"${deleting.description}" for ${formatCents(deleting.amountCents)} will be removed and everyone's balance recalculated. This can't be undone.`
+            ? `"${deleting.description}" for ${formatCents(deleting.amountCents)}${
+                // An owner deleting someone else's record is told whose it is:
+                // the name is the detail that makes the confirmation mean
+                // something.
+                deleting.paidBy === meId ? "" : `, paid by ${nameOf(deleting.paidBy)},`
+              } will be removed and everyone's balance recalculated. This can't be undone.`
             : ""
         }
         confirmLabel="Delete expense"
@@ -779,7 +809,7 @@ function MembersCard({
                   <IconButton
                     label={self ? "Leave this group" : `Remove ${m.name}`}
                     onClick={() => setRemoving(m)}
-                    className="opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover/member:opacity-100 hover:text-[var(--negative)]"
+                    className="transition-opacity duration-150 hover:text-[var(--negative)] sm:opacity-0 sm:focus-within:opacity-100 sm:group-hover/member:opacity-100"
                   >
                     <XIcon className="h-4 w-4" />
                   </IconButton>
