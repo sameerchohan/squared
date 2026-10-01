@@ -8,6 +8,7 @@ import {
   useRef,
   useSyncExternalStore,
 } from "react";
+import { createPortal } from "react-dom";
 import { AlertIcon, ChevronDownIcon, SpinnerIcon, XIcon } from "./icons";
 
 /* -------------------------------------------------------------------------
@@ -452,6 +453,12 @@ export function Avatar({ name, className }: { name: string; className?: string }
    for either of those to happen to, can't fail either way — however tall
    the form gets, you reach the rest of it exactly the way you'd scroll a
    page: wheel, trackpad, touch drag, Page Down, all of it.
+
+   It renders into document.body through a portal. Rendered inline, any
+   ancestor with a transform (the page's .animate-in wrapper, for one)
+   becomes the containing block for `position: fixed`, so the overlay pinned
+   itself to the top of the page content instead of the viewport — off-screen
+   once you'd scrolled, with the page scroll-locked so you couldn't reach it.
 ------------------------------------------------------------------------- */
 
 /**
@@ -656,9 +663,9 @@ export function Dialog({
     }
   }, [open, frameHeight]);
 
-  if (!open) return null;
+  if (!open || typeof document === "undefined") return null;
 
-  return (
+  return createPortal(
     <div
       // The overlay is the scrim, the scroll container, and the click-outside
       // target, all in one element rather than three layered ones — which is
@@ -723,7 +730,8 @@ export function Dialog({
 
         {children}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 

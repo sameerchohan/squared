@@ -300,3 +300,15 @@ Worse, it would have **failed while doing it**. `aws_ecr_repository` has no `for
 **Fix.** Documentation corrected to describe what the code does. The three resources were removed from state before the destroy so they genuinely survived, which is what the README had promised. The real fix is architectural and is recorded as such: resources whose lifecycle differs from the application stack belong in a separate state file, exactly as `infra/bootstrap/` already does for the OIDC provider and CI role.
 
 **Lesson.** Teardown is a code path. It had been written, documented, and never executed — and it was wrong in both directions at once: it claimed resources would survive that would not, and it would have crashed before proving either way.
+
+---
+
+## 22. The edit dialog opened at the top of the page, not where you were
+
+**Symptom.** Scroll down the expense list, tap the pencil on an expense, and the screen froze: dimmed, no dialog in sight, no way to scroll. At the top of the page it worked, which is where it had always been tested. It survived two earlier dialog fixes (the `visualViewport` sizing and the single scroll region), both of which changed the dialog's own geometry and left the cause alone.
+
+**Diagnosis.** The overlay is `position: fixed`, which should pin it to the viewport. It was rendered inside the page's `.animate-in` wrapper, whose entrance animation used `animation-fill-mode: both`. Holding the final keyframe keeps `transform` applied after the animation ends, and an element with a transform becomes the containing block for its fixed-position descendants. So the "full-screen" overlay was sized and placed against the page content instead. Measured in headless Chrome after scrolling 3000px, at both 1280px and 390px wide: the overlay was 5000px tall with its top 2996px above the screen, and the panel, at the overlay's top, was off-screen. The body scroll lock then held the page where it was.
+
+**Fix.** `Dialog` renders through a React portal into `document.body`, so no ancestor's styling can re-parent it. The overlay now matches the viewport exactly wherever the page is scrolled. `.animate-in` uses `backwards` fill, so the wrapper keeps no transform after it finishes. `dialog.test.tsx` renders the dialog inside a transformed wrapper and asserts that it ends up at the document root.
+
+**Lesson.** `position: fixed` is relative to the viewport only when no ancestor has a transform, filter, or `will-change` on those properties. A modal that depends on where it sits in the tree breaks the first time someone adds an entrance animation above it, and no amount of fixing its own sizing will help. Portal it.

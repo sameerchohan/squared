@@ -199,4 +199,19 @@ describe("Dialog", () => {
     await user.click(screen.getByRole("button", { name: "Close" }));
     expect(document.body.style.position).not.toBe("fixed");
   });
+
+  it("renders at the document root, outside a transformed ancestor", () => {
+    // The page wraps its content in .animate-in, whose animation leaves a
+    // transform behind. Rendered inside it, the fixed overlay was positioned
+    // against the page content rather than the viewport, so a dialog opened
+    // after scrolling down appeared off-screen at the top of the page.
+    const { container } = render(
+      <div style={{ transform: "translateY(0)" }}>
+        <Harness initialOpen />
+      </div>
+    );
+    const dialog = screen.getByRole("dialog");
+    expect(container.contains(dialog)).toBe(false);
+    expect(dialog.parentElement?.parentElement).toBe(document.body);
+  });
 });
